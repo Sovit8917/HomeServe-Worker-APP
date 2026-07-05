@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "HomeServe Pro",
+    "slug": "homeserve-worker",
+    "scheme": "homeserveworker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "color": "#E8730A"
+        }
+      ],
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "HomeServe Pro uses your location to show nearby jobs and share live tracking with customers while a job is in progress."
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.homeserve.worker"
+    },
+    "android": {
+      "package": "com.homeserve.worker",
+      "adaptiveIcon": {
+        "backgroundColor": "#E8730A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "extra": {
+      "router": {}
+    }
+  }
+}
