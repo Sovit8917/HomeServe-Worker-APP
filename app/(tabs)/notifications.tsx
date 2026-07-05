@@ -12,6 +12,14 @@ const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   PAYMENT: 'wallet-outline',
   CHAT: 'chatbubble-ellipses-outline',
   SYSTEM: 'information-circle-outline',
+  'booking.new_request': 'briefcase-outline',
+  'booking.created': 'briefcase-outline',
+  'booking.accepted': 'checkmark-circle-outline',
+  'booking.started': 'construct-outline',
+  'booking.completed': 'wallet-outline',
+  'booking.cancelled': 'close-circle-outline',
+  'booking.rejected': 'close-circle-outline',
+  'worker.approved': 'ribbon-outline',
 };
 
 export default function Notifications() {

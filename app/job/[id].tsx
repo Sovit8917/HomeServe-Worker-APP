@@ -20,8 +20,17 @@ export default function JobDetail() {
     try {
       const { data } = await JobsAPI.getById(id);
       setJob(data.data);
-    } catch {
-      Alert.alert('Could not load job', 'Please check your connection and try again.');
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 403 || status === 404) {
+        Alert.alert(
+          'Job no longer available',
+          'This request has already been taken by another worker or is no longer open.',
+          [{ text: 'OK', onPress: () => router.back() }],
+        );
+      } else {
+        Alert.alert('Could not load job', 'Please check your connection and try again.');
+      }
     } finally {
       setLoading(false);
     }

@@ -1,11 +1,21 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
+import Constants from 'expo-constants';
+import type * as NotificationsType from 'expo-notifications';
 import { colors, fontSize, fontWeight, spacing, radius } from '../../src/theme';
 import { Card, StatusPill, statusTone, statusLabel, EmptyState } from '../../src/components/ui';
 import Button from '../../src/components/Button';
 import { JobsAPI, Job, JobStatus } from '../../src/api/endpoints';
+
+// Push notifications aren't available in Expo Go; guard the import the same
+// way usePushNotifications does so this screen doesn't crash there.
+const isExpoGo = Constants.appOwnership === 'expo';
+let Notifications: typeof NotificationsType | null = null;
+if (!isExpoGo) {
+  Notifications = require('expo-notifications');
+}
 
 type TabKey = 'requests' | 'upcoming' | 'history';
 
@@ -20,10 +30,13 @@ export default function Jobs() {
   const [tab, setTab] = useState<TabKey>('requests');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [actingId, setActingId] = useState<string | null>(null);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
 
-  const load = useCallback(async (which: TabKey) => {
-    setLoading(true);
+  const load = useCallback(async (which: TabKey, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       if (which === 'requests') {
         const { data } = await JobsAPI.pendingRequests();
@@ -51,6 +64,27 @@ export default function Jobs() {
       load(tab);
     }, [tab, load]),
   );
+
+  // A "New Job Available" push can arrive while the worker is already
+  // sitting on this screen (no focus/navigation event fires in that case),
+  // which previously left the list stale until the app was reopened.
+  // Refetch the "New" tab in place whenever that notification lands.
+  useEffect(() => {
+    if (!Notifications) return;
+    const sub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data as { type?: string } | undefined;
+      if (data?.type === 'booking.new_request' && tabRef.current === 'requests') {
+        load('requests', { silent: true });
+      }
+    });
+    return () => sub.remove();
+  }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load(tab, { silent: true });
+    setRefreshing(false);
+  }, [tab, load]);
 
   const accept = async (id: string) => {
     setActingId(id);
@@ -108,6 +142,9 @@ export default function Jobs() {
           data={jobs}
           keyExtractor={(j) => j.id}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
+          }
           ListEmptyComponent={
             <EmptyState
               icon="briefcase-outline"
