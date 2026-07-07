@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -135,7 +135,10 @@ export default function Earnings() {
       />
 
       <Modal visible={withdrawOpen} transparent animationType="slide" onRequestClose={() => setWithdrawOpen(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Withdraw earnings</Text>
             <Text style={styles.modalSubtitle}>Available balance: ₹{(wallet?.balance ?? 0).toFixed(2)}</Text>
@@ -145,7 +148,7 @@ export default function Earnings() {
               <Button title="Confirm" onPress={submitWithdraw} loading={withdrawing} style={{ flex: 1 }} />
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

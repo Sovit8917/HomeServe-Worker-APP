@@ -1,12 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, spacing } from '../src/theme';
 import Button from '../src/components/Button';
 import { useAuth } from '../src/store/auth-context';
 
 export default function PendingApproval() {
+  const router = useRouter();
   const { worker, refreshWorker, logout } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -40,7 +42,8 @@ export default function PendingApproval() {
           <>
             <Text style={styles.title}>Application not approved</Text>
             <Text style={styles.subtitle}>
-              Your worker application wasn't approved this time. Contact support if you think this is a mistake.
+              Your worker application wasn't approved this time. You can re-submit your documents or contact
+              support if you think this is a mistake.
             </Text>
           </>
         ) : suspended ? (
@@ -61,7 +64,23 @@ export default function PendingApproval() {
         )}
 
         <Button title="Check status" onPress={onRefresh} loading={refreshing} style={{ marginTop: spacing.xxl }} />
-        <Button title="Log out" onPress={logout} variant="ghost" style={{ marginTop: spacing.md }} />
+
+        {rejected ? (
+          <Button
+            title="Re-upload documents"
+            onPress={() => router.push('/profile/documents')}
+            variant="outline"
+            style={{ marginTop: spacing.md }}
+          />
+        ) : null}
+
+        <Button
+          title="Contact support"
+          onPress={() => router.push('/support/tickets')}
+          variant="ghost"
+          style={{ marginTop: spacing.sm }}
+        />
+        <Button title="Log out" onPress={logout} variant="ghost" style={{ marginTop: spacing.xs }} />
       </ScrollView>
     </SafeAreaView>
   );

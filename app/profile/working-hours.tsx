@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -74,6 +74,7 @@ export default function WorkingHours() {
       {loading ? (
         <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xxl }} />
       ) : (
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.content}>
           {hours.map((d, idx) => (
             <Card key={d.dayOfWeek} style={styles.dayCard}>
@@ -97,6 +98,7 @@ export default function WorkingHours() {
           ))}
           <Button title="Save working hours" onPress={save} loading={saving} style={{ marginTop: spacing.md }} />
         </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </SafeAreaView>
   );

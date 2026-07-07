@@ -103,40 +103,44 @@ export default function JobChat() {
       {loading ? (
         <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xxl }} />
       ) : (
-        <FlatList
-          ref={listRef}
-          data={messages}
-          keyExtractor={(m) => m.id}
-          contentContainerStyle={styles.list}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-          renderItem={({ item }) => {
-            const isMe = item.senderType === 'WORKER' || item.senderId === worker?.id;
-            return (
-              <View style={[styles.bubbleRow, isMe && styles.bubbleRowMe]}>
-                <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
-                  <Text style={[styles.bubbleText, isMe && styles.bubbleTextMe]}>{item.message}</Text>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
+        >
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={(m) => m.id}
+            contentContainerStyle={styles.list}
+            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+            renderItem={({ item }) => {
+              const isMe = item.senderType === 'WORKER' || item.senderId === worker?.id;
+              return (
+                <View style={[styles.bubbleRow, isMe && styles.bubbleRowMe]}>
+                  <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
+                    <Text style={[styles.bubbleText, isMe && styles.bubbleTextMe]}>{item.message}</Text>
+                  </View>
                 </View>
-              </View>
-            );
-          }}
-        />
-      )}
-
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.inputRow}>
-          <TextInput
-            style={styles.input}
-            placeholder="Type a message..."
-            placeholderTextColor={colors.textMuted}
-            value={text}
-            onChangeText={setText}
-            multiline
+              );
+            }}
           />
-          <Pressable onPress={send} disabled={!text.trim() || sending} style={[styles.sendBtn, (!text.trim() || sending) && { opacity: 0.5 }]}>
-            <Ionicons name="send" size={18} color={colors.white} />
-          </Pressable>
-        </View>
-      </KeyboardAvoidingView>
+
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.input}
+              placeholder="Type a message..."
+              placeholderTextColor={colors.textMuted}
+              value={text}
+              onChangeText={setText}
+              multiline
+            />
+            <Pressable onPress={send} disabled={!text.trim() || sending} style={[styles.sendBtn, (!text.trim() || sending) && { opacity: 0.5 }]}>
+              <Ionicons name="send" size={18} color={colors.white} />
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      )}
     </SafeAreaView>
   );
 }

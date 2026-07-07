@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -66,6 +66,7 @@ export default function BankDetails() {
       {loading ? (
         <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xxl }} />
       ) : (
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={styles.subtitle}>Your earnings withdrawals are sent to this account.</Text>
           <Input label="Account holder name" value={accountName} onChangeText={setAccountName} />
@@ -75,6 +76,7 @@ export default function BankDetails() {
           <Input label="UPI ID (optional)" value={upiId} onChangeText={setUpiId} autoCapitalize="none" />
           <Button title="Save bank details" onPress={save} loading={saving} style={{ marginTop: spacing.md }} />
         </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </SafeAreaView>
   );

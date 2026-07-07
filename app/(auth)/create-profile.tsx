@@ -8,6 +8,8 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -41,14 +43,9 @@ export default function CreateProfile() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // If this worker already completed their profile (returning worker),
-  // skip straight past this screen — nothing dummy/static about it, it's
-  // simply not needed twice.
-  useEffect(() => {
-    if (worker?.name) {
-      router.replace('/(tabs)');
-    }
-  }, [worker?.name]);
+  // Routing between onboarding steps (create-profile → documents →
+  // pending-approval → tabs) is centrally handled in app/_layout.tsx, so
+  // this screen doesn't need its own redirect logic.
 
   useEffect(() => {
     (async () => {
@@ -140,7 +137,7 @@ export default function CreateProfile() {
       if (skills.length) await WorkerAPI.updateSkills(skills);
       await WorkerAPI.updateServices(selectedServiceIds);
       await refreshWorker();
-      router.replace('/pending-approval');
+      router.replace('/(auth)/documents');
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Could not save your profile. Please try again.');
     } finally {
@@ -150,7 +147,8 @@ export default function CreateProfile() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.heading}>Set up your worker profile</Text>
         <Text style={styles.subheading}>
           Customers see this before booking you. Add real details so they know who's coming.
@@ -265,6 +263,7 @@ export default function CreateProfile() {
 
         <Button title="Submit for review" onPress={handleSubmit} loading={saving} style={{ marginTop: spacing.xl }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

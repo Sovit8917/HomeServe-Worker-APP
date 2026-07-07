@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, FlatList, Modal, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList, Modal, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,7 +12,7 @@ interface Ticket {
   id: string;
   subject: string;
   description: string;
-  status: 'OPEN' | 'RESOLVED' | 'CLOSED';
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
   createdAt: string;
 }
 
@@ -85,7 +85,7 @@ export default function Tickets() {
           contentContainerStyle={styles.list}
           ListEmptyComponent={<EmptyState icon="chatbox-ellipses-outline" title="No support tickets yet" subtitle="Tap + to raise a new request." />}
           renderItem={({ item }) => (
-            <Card>
+            <Card onPress={() => router.push({ pathname: '/support/ticket/[id]', params: { id: item.id } })}>
               <View style={styles.ticketTop}>
                 <Text style={styles.subject}>{item.subject}</Text>
                 <StatusPill label={item.status} tone={statusTone(item.status)} />
@@ -98,7 +98,10 @@ export default function Tickets() {
       )}
 
       <Modal visible={createOpen} transparent animationType="slide" onRequestClose={() => setCreateOpen(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>New support ticket</Text>
             <Input label="Subject" value={subject} onChangeText={setSubject} placeholder="What's this about?" />
@@ -108,7 +111,7 @@ export default function Tickets() {
               <Button title="Submit" onPress={submit} loading={submitting} style={{ flex: 1 }} />
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

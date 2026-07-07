@@ -9,6 +9,7 @@ import { Card, StatusPill } from '../../src/components/ui';
 import { UploadAPI, WorkerAPI, WorkerDocument } from '../../src/api/endpoints';
 
 const REQUIRED_DOCS = [
+  { type: 'SELFIE', label: 'Live selfie', useCamera: 'front' as const },
   { type: 'ID_PROOF', label: 'Government ID (Aadhaar / PAN)' },
   { type: 'ADDRESS_PROOF', label: 'Address proof' },
   { type: 'CERTIFICATE', label: 'Trade certificate (optional)' },
@@ -37,13 +38,28 @@ export default function Documents() {
     }, [load]),
   );
 
-  const uploadDoc = async (type: string) => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow photo library access to upload documents.');
-      return;
+  const uploadDoc = async (type: string, useCamera?: 'front' | 'back') => {
+    let result: ImagePicker.ImagePickerResult;
+    if (useCamera) {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Camera permission needed', 'Allow camera access to take your selfie.');
+        return;
+      }
+      result = await ImagePicker.launchCameraAsync({
+        cameraType: useCamera === 'front' ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+      });
+    } else {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow photo library access to upload documents.');
+        return;
+      }
+      result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
     }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
     if (result.canceled || !result.assets?.[0]) return;
 
     setUploadingType(type);
@@ -82,8 +98,12 @@ export default function Documents() {
           renderItem={({ item }) => {
             const existing = documents.find((d) => d.type === item.type);
             return (
-              <Card onPress={() => uploadDoc(item.type)} style={styles.docCard}>
-                <Ionicons name="document-text-outline" size={22} color={colors.primary} />
+              <Card onPress={() => uploadDoc(item.type, (item as any).useCamera)} style={styles.docCard}>
+                <Ionicons
+                  name={(item as any).useCamera ? 'camera-outline' : 'document-text-outline'}
+                  size={22}
+                  color={colors.primary}
+                />
                 <View style={{ flex: 1, marginLeft: spacing.md }}>
                   <Text style={styles.docLabel}>{item.label}</Text>
                   {existing ? (

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Image, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Image, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -77,6 +77,7 @@ export default function EditProfile() {
         <Text style={styles.headerTitle}>Edit profile</Text>
         <View style={{ width: 40 }} />
       </View>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView contentContainerStyle={styles.content}>
         <Pressable onPress={pickAvatar} style={styles.avatarWrap}>
           {uploading ? (
@@ -96,6 +97,7 @@ export default function EditProfile() {
 
         <Button title="Save changes" onPress={save} loading={saving} style={{ marginTop: spacing.md }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

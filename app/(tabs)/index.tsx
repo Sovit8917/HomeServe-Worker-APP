@@ -9,6 +9,7 @@ import { useAuth } from '../../src/store/auth-context';
 import { JobsAPI, Job, WalletAPI, WorkerAPI } from '../../src/api/endpoints';
 import { useLocation } from '../../src/hooks/useLocation';
 import { useLiveTracking } from '../../src/hooks/useLiveTracking';
+import { hasRequiredDocuments } from '../../src/lib/worker-verification';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -111,6 +112,19 @@ export default function Dashboard() {
           {togglingOnline ? <Text style={styles.updatingText}>Updating…</Text> : null}
         </Card>
 
+        {worker && worker.status === 'APPROVED' && !hasRequiredDocuments(worker) ? (
+          <Card onPress={() => router.push('/profile/documents')} style={styles.verifyBanner}>
+            <View style={styles.activeJobRow}>
+              <IconBadge name="shield-checkmark-outline" bg={colors.warningLight} color={colors.warning} />
+              <View style={{ flex: 1, marginLeft: spacing.md }}>
+                <Text style={styles.activeJobTitle}>Finish your verification</Text>
+                <Text style={styles.activeJobSub}>Add your ID and selfie to keep your account in good standing.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </View>
+          </Card>
+        ) : null}
+
         {activeJob ? (
           <Card onPress={() => router.push({ pathname: '/job/[id]', params: { id: activeJob.id } })} style={styles.activeJobCard}>
             <View style={styles.activeJobRow}>
@@ -181,6 +195,7 @@ const styles = StyleSheet.create({
   onlineCard: { paddingVertical: spacing.sm },
   updatingText: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: -spacing.sm, marginBottom: spacing.sm },
   activeJobCard: { backgroundColor: colors.primaryLight, borderWidth: 0 },
+  verifyBanner: { backgroundColor: colors.warningLight, borderWidth: 0 },
   activeJobRow: { flexDirection: 'row', alignItems: 'center' },
   activeJobTitle: { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: colors.textPrimary },
   activeJobSub: { fontSize: fontSize.xs, color: colors.textSecondary, marginTop: 2 },

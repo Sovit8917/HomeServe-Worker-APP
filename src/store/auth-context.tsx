@@ -56,11 +56,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     setIsNewWorker(!!auth.isNew);
-    setWorker(auth.worker);
 
-    if (!auth.worker) {
+    // The OTP-verify response returns the bare worker row (no documents /
+    // skills / services relations). Always hydrate the full profile so
+    // downstream checks like hasRequiredDocuments() have real data instead
+    // of silently treating an already-verified worker as having none.
+    if (auth.worker) {
+      setWorker(auth.worker);
+    }
+    try {
       const profile = await WorkerAPI.getProfile();
       setWorker(profile.data.data ?? (profile.data as unknown as Worker));
+    } catch {
+      // Non-fatal — the bare worker row from auth.worker is still usable
+      // for the immediate navigation decision.
     }
   };
 
