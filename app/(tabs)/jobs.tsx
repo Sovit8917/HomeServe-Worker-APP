@@ -3,18 +3,20 @@ import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
-import type * as NotificationsType from 'expo-notifications';
+import * as Location from 'expo-location';
 import { colors, fontSize, fontWeight, spacing, radius } from '../../src/theme';
 import { Card, StatusPill, statusTone, statusLabel, EmptyState } from '../../src/components/ui';
 import Button from '../../src/components/Button';
+import JobLocationMap from '../../src/components/JobLocationMap';
 import { JobsAPI, Job, JobStatus } from '../../src/api/endpoints';
 
-// Push notifications aren't available in Expo Go; guard the import the same
-// way usePushNotifications does so this screen doesn't crash there.
+// Push notifications (Firebase messaging + Notifee) aren't available in
+// Expo Go; guard the import the same way usePushNotifications does so
+// this screen doesn't crash there.
 const isExpoGo = Constants.appOwnership === 'expo';
-let Notifications: typeof NotificationsType | null = null;
+let messaging: typeof import('@react-native-firebase/messaging').default | null = null;
 if (!isExpoGo) {
-  Notifications = require('expo-notifications');
+  messaging = require('@react-native-firebase/messaging').default;
 }
 
 type TabKey = 'requests' | 'upcoming' | 'history';
@@ -32,8 +34,33 @@ export default function Jobs() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actingId, setActingId] = useState<string | null>(null);
+  const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [requestsReason, setRequestsReason] = useState<string | null>(null);
   const tabRef = useRef(tab);
   tabRef.current = tab;
+
+  // One-off read (not a continuous watch — useLiveTracking already handles
+  // that elsewhere) just so the request-card map has a "you are here" pin.
+  useEffect(() => {
+    (async () => {
+      try {
+        let { status } = await Location.getForegroundPermissionsAsync();
+        // Previously this only CHECKED for existing permission and gave up
+        // if not granted — for a worker who hadn't already granted location
+        // somewhere else in the app (e.g. hasn't gone online yet), the map
+        // preview showed "unavailable" forever, with no way to fix it from
+        // this screen. Now it actually asks.
+        if (status !== 'granted') {
+          ({ status } = await Location.requestForegroundPermissionsAsync());
+        }
+        if (status !== 'granted') return;
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setMyLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      } catch {
+        // Best-effort — the map component falls back to a text-only state.
+      }
+    })();
+  }, []);
 
   const load = useCallback(async (which: TabKey, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -41,6 +68,7 @@ export default function Jobs() {
       if (which === 'requests') {
         const { data } = await JobsAPI.pendingRequests();
         setJobs(data.data ?? []);
+        setRequestsReason(data.meta?.reason ?? null);
       } else if (which === 'upcoming') {
         const { data } = await JobsAPI.upcoming();
         setJobs(data.data ?? []);
@@ -70,14 +98,17 @@ export default function Jobs() {
   // which previously left the list stale until the app was reopened.
   // Refetch the "New" tab in place whenever that notification lands.
   useEffect(() => {
-    if (!Notifications) return;
-    const sub = Notifications.addNotificationReceivedListener((notification) => {
-      const data = notification.request.content.data as { type?: string } | undefined;
+    if (!messaging) return;
+    // onMessage only fires for foreground pushes, which is exactly the
+    // case this in-place refresh is for — background/killed-state pushes
+    // already refetch via useFocusEffect when the worker opens the app.
+    const unsubscribe = messaging().onMessage((remoteMessage) => {
+      const data = remoteMessage.data as { type?: string } | undefined;
       if (data?.type === 'booking.new_request' && tabRef.current === 'requests') {
         load('requests', { silent: true });
       }
     });
-    return () => sub.remove();
+    return unsubscribe;
   }, [load]);
 
   const onRefresh = useCallback(async () => {
@@ -148,8 +179,22 @@ export default function Jobs() {
           ListEmptyComponent={
             <EmptyState
               icon="briefcase-outline"
-              title={tab === 'requests' ? 'No new requests' : tab === 'upcoming' ? 'No upcoming jobs' : 'No job history yet'}
-              subtitle={tab === 'requests' ? 'Go online from the Home tab to start receiving job requests.' : undefined}
+              title={
+                tab === 'requests'
+                  ? requestsReason === 'NO_SERVICES_SELECTED'
+                    ? 'No services selected yet'
+                    : 'No new requests nearby'
+                  : tab === 'upcoming'
+                  ? 'No upcoming jobs'
+                  : 'No job history yet'
+              }
+              subtitle={
+                tab === 'requests'
+                  ? requestsReason === 'NO_SERVICES_SELECTED'
+                    ? 'Go to Profile → Skills & Services and select what you offer to start seeing job requests.'
+                    : "Go online from the Home tab, and make sure you're within your service radius of customers."
+                  : undefined
+              }
             />
           }
           renderItem={({ item }) => (
@@ -168,6 +213,26 @@ export default function Jobs() {
               </Text>
               {item.address?.city ? <Text style={styles.jobMeta}>{item.address.city}</Text> : null}
               <Text style={styles.jobAmount}>₹{(item.finalAmount ?? item.total ?? 0).toFixed(0)}</Text>
+
+              {tab !== 'requests' && item.overdueFlaggedAt ? (
+                <View style={styles.overdueBanner}>
+                  <Text style={styles.overdueBannerText}>
+                    ⚠️ Overdue — this job's scheduled time has passed
+                  </Text>
+                </View>
+              ) : null}
+
+              {tab === 'requests' ? (
+                <View style={{ marginTop: spacing.sm }}>
+                  <JobLocationMap
+                    workerLat={myLocation?.lat ?? null}
+                    workerLng={myLocation?.lng ?? null}
+                    customerLat={item.address?.latitude ?? null}
+                    customerLng={item.address?.longitude ?? null}
+                    distanceKm={item.distanceKm}
+                  />
+                </View>
+              ) : null}
 
               {tab === 'requests' ? (
                 <View style={styles.actionRow}>
@@ -211,5 +276,17 @@ const styles = StyleSheet.create({
   jobService: { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: colors.textPrimary, flex: 1, marginRight: spacing.sm },
   jobMeta: { fontSize: fontSize.xs, color: colors.textMuted },
   jobAmount: { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: colors.primary, marginTop: 4 },
+  overdueBanner: {
+    backgroundColor: colors.dangerLight ?? '#FDECEC',
+    borderRadius: radius.sm,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  overdueBannerText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.danger ?? '#D92D20',
+  },
   actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
 });

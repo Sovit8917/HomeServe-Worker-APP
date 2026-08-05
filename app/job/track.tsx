@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Linking, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Linking, ActivityIndicator, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -50,11 +50,40 @@ export default function TrackJob() {
     return () => sub?.remove();
   }, [job?.address?.latitude, job?.address?.longitude]);
 
-  const openMaps = () => {
-    if (!job?.address?.latitude || !job?.address?.longitude) return;
+  const openMaps = async () => {
+    if (!job?.address?.latitude || !job?.address?.longitude) {
+      Alert.alert('No location', "This booking doesn't have a saved location to navigate to.");
+      return;
+    }
     const { latitude, longitude } = job.address;
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
-    Linking.openURL(url);
+
+    // Previously gated each candidate behind Linking.canOpenURL() first —
+    // but on Android, canOpenURL can return a false negative for https
+    // intents due to package-visibility rules (Android 11+), even when
+    // openURL() itself would work fine. So now we just try openURL
+    // directly for each candidate and only fall through on an actual
+    // thrown error, which is a much more reliable signal.
+    const candidates = [
+      Platform.OS === 'android'
+        ? `geo:${latitude},${longitude}?q=${latitude},${longitude}(Customer)`
+        : `maps://?daddr=${latitude},${longitude}`,
+      `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`,
+      `https://maps.google.com/?q=${latitude},${longitude}`,
+    ];
+
+    for (const url of candidates) {
+      try {
+        await Linking.openURL(url);
+        return;
+      } catch {
+        // try the next candidate
+      }
+    }
+
+    Alert.alert(
+      'Could not open Maps',
+      'No maps or browser app responded on this device. Please install Google Maps or a browser to navigate to this job.',
+    );
   };
 
   if (loading || !job) {

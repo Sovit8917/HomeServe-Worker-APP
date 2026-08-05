@@ -3,7 +3,7 @@
     "name": "HomeServe Pro",
     "slug": "homeserve-worker",
     "scheme": "homeserveworker",
-    "version": "1.0.1",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -23,14 +23,23 @@
         {
           "locationAlwaysAndWhenInUsePermission": "HomeServe Pro uses your location to show nearby jobs and share live tracking with customers while a job is in progress."
         }
-      ]
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging"
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.homeserve.worker"
+      "bundleIdentifier": "com.homeserve.worker",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
+      }
     },
     "android": {
       "package": "com.homeserve.worker",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E8730A",
         "foregroundImage": "./assets/android-icon-foreground.png",

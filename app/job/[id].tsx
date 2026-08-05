@@ -3,10 +3,11 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Alert
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, fontSize, fontWeight, spacing, radius } from '../../src/theme';
 import { Card, StatusPill, statusTone, statusLabel, IconBadge } from '../../src/components/ui';
 import Button from '../../src/components/Button';
-import { JobsAPI, Job } from '../../src/api/endpoints';
+import { JobsAPI, Job, UploadAPI } from '../../src/api/endpoints';
 
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -14,6 +15,7 @@ export default function JobDetail() {
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
+  const [uploadingStage, setUploadingStage] = useState<'before' | 'after' | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -64,6 +66,30 @@ export default function JobDetail() {
     if (job?.user?.phone) Linking.openURL(`tel:${job.user.phone}`);
   };
 
+  const uploadProof = async (stage: 'before' | 'after') => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Camera permission needed', 'Allow camera access to take a work-proof photo.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    setUploadingStage(stage);
+    try {
+      const asset = result.assets[0];
+      const formData = new FormData();
+      formData.append('file', { uri: asset.uri, name: `${stage}-${Date.now()}.jpg`, type: 'image/jpeg' } as any);
+      const { data } = await UploadAPI.uploadImage(formData, 'proof');
+      await JobsAPI.addWorkProof(job!.id, stage, [data.data.url]);
+      await load();
+    } catch (e: any) {
+      Alert.alert('Upload failed', e?.response?.data?.message || 'Please try again.');
+    } finally {
+      setUploadingStage(null);
+    }
+  };
+
   if (loading || !job) {
     return (
       <SafeAreaView style={styles.container}>
@@ -87,6 +113,15 @@ export default function JobDetail() {
           <StatusPill label={statusLabel(job.status)} tone={statusTone(job.status)} />
           <Text style={styles.amount}>₹{(job.finalAmount ?? job.total ?? 0).toFixed(0)}</Text>
         </View>
+
+        {job.overdueFlaggedAt ? (
+          <View style={styles.overdueBanner}>
+            <Ionicons name="warning-outline" size={16} color={colors.danger} />
+            <Text style={styles.overdueBannerText}>
+              This job's scheduled time has passed. Please start it now, or contact support if you're delayed.
+            </Text>
+          </View>
+        ) : null}
 
         <Card>
           <Text style={styles.sectionTitle}>Service</Text>
@@ -165,6 +200,58 @@ export default function JobDetail() {
           </View>
         ) : null}
 
+        {!jobIsOver && (job.status === 'ACCEPTED' || job.status === 'IN_PROGRESS') ? (
+          <Card style={{ marginTop: spacing.md }}>
+            <Text style={styles.sectionTitle}>Work Proof Photos</Text>
+            <Text style={styles.metaText}>
+              Take a "before" photo when you arrive, and an "after" photo once the job is done —
+              this protects you if a customer disputes the work later.
+            </Text>
+
+            <View style={{ marginTop: spacing.md }}>
+              <Text style={[styles.itemQty, { marginBottom: spacing.xs }]}>Before</Text>
+              <View style={styles.photoRow}>
+                {(job.proofBeforePhotos ?? []).map((url, i) => (
+                  <Image key={i} source={{ uri: url }} style={styles.photoThumb} />
+                ))}
+                <Pressable
+                  style={styles.addPhotoBtn}
+                  disabled={uploadingStage === 'before'}
+                  onPress={() => uploadProof('before')}
+                >
+                  {uploadingStage === 'before' ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                  )}
+                </Pressable>
+              </View>
+            </View>
+
+            {job.status === 'IN_PROGRESS' && (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={[styles.itemQty, { marginBottom: spacing.xs }]}>After</Text>
+                <View style={styles.photoRow}>
+                  {(job.proofAfterPhotos ?? []).map((url, i) => (
+                    <Image key={i} source={{ uri: url }} style={styles.photoThumb} />
+                  ))}
+                  <Pressable
+                    style={styles.addPhotoBtn}
+                    disabled={uploadingStage === 'after'}
+                    onPress={() => uploadProof('after')}
+                  >
+                    {uploadingStage === 'after' ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : (
+                      <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          </Card>
+        ) : null}
+
         {job.payment ? (
           <Card style={{ marginTop: spacing.md }}>
             <Text style={styles.sectionTitle}>Payment</Text>
@@ -210,16 +297,23 @@ export default function JobDetail() {
           <Button
             title="Mark as completed"
             loading={acting}
-            onPress={() =>
-              Alert.alert('Complete this job?', 'Make sure the work is finished before marking it complete.', [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Complete',
-                  onPress: () =>
-                    runAction(() => JobsAPI.complete(job.id), 'Job marked complete. Great work!'),
-                },
-              ])
-            }
+            onPress={() => {
+              const hasAfterPhoto = (job.proofAfterPhotos ?? []).length > 0;
+              Alert.alert(
+                'Complete this job?',
+                hasAfterPhoto
+                  ? 'Make sure the work is finished before marking it complete.'
+                  : "You haven't added an \"after\" photo yet — it helps protect you if the customer disputes the work later. Complete anyway?",
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Complete',
+                    onPress: () =>
+                      runAction(() => JobsAPI.complete(job.id), 'Job marked complete. Great work!'),
+                  },
+                ],
+              );
+            }}
           />
         ) : null}
       </View>
@@ -235,6 +329,29 @@ const styles = StyleSheet.create({
   content: { padding: spacing.xxl, paddingTop: 0, gap: spacing.md, paddingBottom: spacing.xxxl },
   statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
   amount: { fontSize: fontSize.xl, fontWeight: fontWeight.extrabold, color: colors.primary },
+  overdueBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.dangerLight,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  overdueBannerText: { flex: 1, fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.danger },
+  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  photoThumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
+  addPhotoBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primaryLight,
+  },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.textMuted, textTransform: 'uppercase', marginBottom: spacing.sm },
   itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 6 },
   itemName: { fontSize: fontSize.md, color: colors.textPrimary, flex: 1 },

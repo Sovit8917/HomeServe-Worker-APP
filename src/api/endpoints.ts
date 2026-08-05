@@ -127,6 +127,14 @@ export interface Job {
   address?: JobAddress;
   items?: JobItem[];
   payment?: { status: string; method: string; amount: number } | null;
+  // Present on "pending requests" (new job) results only — km from the
+  // worker's last known location to this booking's address.
+  distanceKm?: number | null;
+  // Set once the overdue-detection cron flags this job — worker app shows
+  // a warning banner when this is present.
+  overdueFlaggedAt?: string | null;
+  proofBeforePhotos?: string[];
+  proofAfterPhotos?: string[];
 }
 
 // ---------- Auth ----------
@@ -169,7 +177,7 @@ export const CatalogAPI = {
 
 // ---------- Jobs (bookings, from the worker's point of view) ----------
 export const JobsAPI = {
-  pendingRequests: () => api.get<{ data: Job[] }>('/bookings/worker/pending-requests'),
+  pendingRequests: () => api.get<{ data: Job[]; meta?: { reason?: string } }>('/bookings/worker/pending-requests'),
   today: () => api.get<{ data: Job[] }>('/bookings/worker/today'),
   upcoming: () => api.get<{ data: Job[] }>('/bookings/worker/upcoming'),
   myJobs: (status?: JobStatus) =>
@@ -180,6 +188,11 @@ export const JobsAPI = {
   start: (id: string) => api.put(`/bookings/${id}/start`),
   complete: (id: string) => api.put(`/bookings/${id}/complete`),
   cancel: (id: string, reason: string) => api.put(`/bookings/${id}/cancel`, { reason }),
+  addWorkProof: (id: string, stage: 'before' | 'after', urls: string[]) =>
+    api.post<{ data: { proofBeforePhotos: string[]; proofAfterPhotos: string[] } }>(
+      `/bookings/${id}/proof`,
+      { stage, urls },
+    ),
 };
 
 // ---------- Chat ----------
