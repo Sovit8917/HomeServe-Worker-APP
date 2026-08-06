@@ -9,19 +9,38 @@ import { colors } from '../src/theme';
 import { usePushNotifications } from '../src/hooks/usePushNotifications';
 import { hasRequiredDocuments } from '../src/lib/worker-verification';
 
+import PermissionsModal from '../src/components/PermissionsModal';
+
 export const ONBOARDING_KEY = 'homeserve_worker_has_onboarded';
+export const PERMISSIONS_PROMPTED_KEY = 'homeserve_worker_permissions_prompted';
 
 function RootNavigation() {
   const { isAuthenticated, isLoading, worker } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const [hasOnboarded, setHasOnboarded] = useState<boolean | null>(null);
+  const [showPermissionsModal, setShowPermissionsModal] = useState(false);
 
   usePushNotifications(isAuthenticated);
 
   useEffect(() => {
     AsyncStorage.getItem(ONBOARDING_KEY).then((v) => setHasOnboarded(v === 'true'));
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      AsyncStorage.getItem(PERMISSIONS_PROMPTED_KEY).then((v) => {
+        if (v !== 'true') {
+          setShowPermissionsModal(true);
+        }
+      });
+    }
+  }, [isAuthenticated]);
+
+  const handlePermissionsComplete = async () => {
+    setShowPermissionsModal(false);
+    await AsyncStorage.setItem(PERMISSIONS_PROMPTED_KEY, 'true');
+  };
 
   useEffect(() => {
     if (isLoading || hasOnboarded === null) return;
@@ -87,14 +106,20 @@ function RootNavigation() {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
-      <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="pending-approval" />
-      <Stack.Screen name="job/[id]" />
-      <Stack.Screen name="job/chat" />
-      <Stack.Screen name="job/track" />
-    </Stack>
+    <>
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="pending-approval" />
+        <Stack.Screen name="job/[id]" />
+        <Stack.Screen name="job/chat" />
+        <Stack.Screen name="job/track" />
+      </Stack>
+      <PermissionsModal
+        visible={showPermissionsModal}
+        onComplete={handlePermissionsComplete}
+      />
+    </>
   );
 }
 

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AuthAPI, WorkerAPI, Worker } from '../api/endpoints';
-import { TOKEN_KEY, REFRESH_KEY } from '../api/client';
+import { TOKEN_KEY, REFRESH_KEY, setOnUnauthorizedCallback } from '../api/client';
 import { disconnectAllSockets } from '../lib/socket';
 
 interface AuthContextValue {
@@ -39,6 +39,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    setOnUnauthorizedCallback(() => {
+      logout();
+    });
     bootstrap();
   }, [bootstrap]);
 
@@ -52,10 +55,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifyOtp = async (phone: string, otp: string) => {
     const response: any = await AuthAPI.verifyOtp(phone, otp);
     const auth = response.data.data;
-    const accessToken = auth.token;
+    const accessToken = auth.token ?? auth.accessToken;
+    const refreshToken = auth.refreshToken;
 
     if (accessToken) {
       await SecureStore.setItemAsync(TOKEN_KEY, accessToken);
+    }
+    if (refreshToken) {
+      await SecureStore.setItemAsync(REFRESH_KEY, refreshToken);
     }
 
     setIsNewWorker(!!auth.isNew);

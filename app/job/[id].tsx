@@ -1,13 +1,14 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Alert, Linking, Image, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Alert, Linking, Image, Modal, TextInput, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import { colors, fontSize, fontWeight, spacing, radius } from '../../src/theme';
+import { colors, fontSize, fontWeight, spacing, radius, shadow } from '../../src/theme';
 import { Card, StatusPill, statusTone, statusLabel, IconBadge } from '../../src/components/ui';
 import Button from '../../src/components/Button';
 import { JobsAPI, Job, UploadAPI } from '../../src/api/endpoints';
+import ImagePickerModal from '../../src/components/ImagePickerModal';
+import ImageViewerModal from '../../src/components/ImageViewerModal';
 
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -16,6 +17,8 @@ export default function JobDetail() {
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
   const [uploadingStage, setUploadingStage] = useState<'before' | 'after' | null>(null);
+  const [pickerModalStage, setPickerModalStage] = useState<'before' | 'after' | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
   const [startModalVisible, setStartModalVisible] = useState(false);
   const [startOtp, setStartOtp] = useState('');
   const [startError, setStartError] = useState('');
@@ -47,16 +50,13 @@ export default function JobDetail() {
     }, [load]),
   );
 
-  // The job is "over" once completed/cancelled/rejected. From this point the
-  // backend has already stripped the customer's phone/email/exact address,
-  // and we mirror that in the UI by never showing contact actions.
   const jobIsOver = job ? ['COMPLETED', 'CANCELLED', 'REJECTED'].includes(job.status) : false;
 
   const runAction = async (action: () => Promise<any>, successMessage?: string) => {
     setActing(true);
     try {
       await action();
-      if (successMessage) Alert.alert(successMessage);
+      if (successMessage) Alert.alert('Success', successMessage);
       await load();
     } catch (e: any) {
       Alert.alert('Action failed', e?.response?.data?.message || 'Please try again.');
@@ -82,44 +82,35 @@ export default function JobDetail() {
       setStartOtp('');
       await load();
     } catch (e: any) {
-      setStartError(e?.response?.data?.message || 'Incorrect code. Please try again.');
+      setStartError(e?.response?.data?.message || 'Incorrect code. Please check customer app and try again.');
     } finally {
       setActing(false);
     }
   };
 
-  // FIX: the ImagePicker permission/camera calls used to sit OUTSIDE the
-  // try/catch. If launchCameraAsync threw (very common on real Android
-  // devices), the error was silently swallowed - nothing happened on
-  // screen and no error was shown. Everything is now inside one
-  // try/catch/finally so any failure surfaces an Alert + console log.
-  const uploadProof = async (stage: 'before' | 'after') => {
+  const handleImagePicked = async (uri: string, stage: 'before' | 'after') => {
+    if (!job) return;
+    setUploadingStage(stage);
     try {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Camera permission needed', 'Allow camera access to take a work-proof photo.');
-        return;
-      }
-
-      const result = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
-      if (result.canceled || !result.assets?.[0]) return;
-
-      setUploadingStage(stage);
-
-      const asset = result.assets[0];
       const formData = new FormData();
+      const filename = `${stage}-${Date.now()}.jpg`;
       formData.append('file', {
-        uri: asset.uri,
-        name: `${stage}-${Date.now()}.jpg`,
+        uri: Platform.OS === 'android' ? uri : uri.replace('file://', ''),
+        name: filename,
         type: 'image/jpeg',
       } as any);
 
       const { data } = await UploadAPI.uploadImage(formData, 'proof');
-      await JobsAPI.addWorkProof(job!.id, stage, [data.data.url]);
+      const photoUrl = data.data?.url ?? (data as any).url;
+
+      if (!photoUrl) throw new Error('Could not process uploaded image response.');
+
+      await JobsAPI.addWorkProof(job.id, stage, [photoUrl]);
       await load();
+      Alert.alert('Success', `${stage === 'before' ? 'Before' : 'After'} photo uploaded successfully.`);
     } catch (e: any) {
       console.log('uploadProof error:', e);
-      Alert.alert('Upload failed', e?.response?.data?.message || e?.message || 'Please try again.');
+      Alert.alert('Upload Failed', e?.response?.data?.message || e?.message || 'Failed to upload photo. Please try again.');
     } finally {
       setUploadingStage(null);
     }
@@ -151,15 +142,15 @@ export default function JobDetail() {
 
         {job.overdueFlaggedAt ? (
           <View style={styles.overdueBanner}>
-            <Ionicons name="warning-outline" size={16} color={colors.danger} />
+            <Ionicons name="warning-outline" size={18} color={colors.danger} />
             <Text style={styles.overdueBannerText}>
-              This job's scheduled time has passed. Please start it now, or contact support if you're delayed.
+              This job's scheduled time has passed. Please start it now, or contact support if delayed.
             </Text>
           </View>
         ) : null}
 
         <Card>
-          <Text style={styles.sectionTitle}>Service</Text>
+          <Text style={styles.sectionTitle}>Service Details</Text>
           {(job.items ?? []).map((item) => (
             <View key={item.id} style={styles.itemRow}>
               <Text style={styles.itemName}>{item.service?.name}</Text>
@@ -182,7 +173,7 @@ export default function JobDetail() {
         </Card>
 
         <Card style={{ marginTop: spacing.md }}>
-          <Text style={styles.sectionTitle}>{jobIsOver ? 'Location' : 'Customer & location'}</Text>
+          <Text style={styles.sectionTitle}>{jobIsOver ? 'Location' : 'Customer & Location'}</Text>
 
           {!jobIsOver ? (
             <View style={styles.customerRow}>
@@ -203,7 +194,7 @@ export default function JobDetail() {
             </View>
           ) : (
             <Text style={styles.privacyNote}>
-              This job is closed, so the customer's contact details are no longer shown here.
+              This job is closed, customer contact details are hidden for privacy.
             </Text>
           )}
 
@@ -239,57 +230,78 @@ export default function JobDetail() {
           <Card style={{ marginTop: spacing.md }}>
             <Text style={styles.sectionTitle}>Work Proof Photos</Text>
             <Text style={styles.metaText}>
-              Take a "before" photo when you arrive, and an "after" photo once the job is done —
-              this protects you if a customer disputes the work later.
+              Tap the camera icons to upload "Before" and "After" photos of the site. Photos protect your payout if disputes arise.
             </Text>
 
+            {/* Before Photos */}
             <View style={{ marginTop: spacing.md }}>
-              <Text style={[styles.itemQty, { marginBottom: spacing.xs }]}>Before</Text>
+              <View style={styles.proofHeader}>
+                <Text style={styles.proofStageTitle}>Before Photos</Text>
+                <Text style={styles.proofStageCount}>{(job.proofBeforePhotos ?? []).length} uploaded</Text>
+              </View>
               <View style={styles.photoRow}>
                 {(job.proofBeforePhotos ?? []).map((url, i) => (
-                  <Image key={i} source={{ uri: url }} style={styles.photoThumb} />
+                  <Pressable
+                    key={i}
+                    onPress={() => setPreviewImage({ url, title: 'Before Work Photo' })}
+                  >
+                    <Image source={{ uri: url }} style={styles.photoThumb} />
+                  </Pressable>
                 ))}
                 <Pressable
-                  style={styles.addPhotoBtn}
+                  style={[styles.addPhotoBtn, uploadingStage === 'before' && styles.addPhotoBtnActive]}
                   disabled={uploadingStage === 'before'}
-                  onPress={() => uploadProof('before')}
+                  onPress={() => setPickerModalStage('before')}
                 >
                   {uploadingStage === 'before' ? (
                     <ActivityIndicator size="small" color={colors.primary} />
                   ) : (
-                    <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                    <>
+                      <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                      <Text style={styles.addPhotoText}>Before</Text>
+                    </>
                   )}
                 </Pressable>
               </View>
             </View>
 
-            {job.status === 'IN_PROGRESS' && (
-              <View style={{ marginTop: spacing.md }}>
-                <Text style={[styles.itemQty, { marginBottom: spacing.xs }]}>After</Text>
-                <View style={styles.photoRow}>
-                  {(job.proofAfterPhotos ?? []).map((url, i) => (
-                    <Image key={i} source={{ uri: url }} style={styles.photoThumb} />
-                  ))}
-                  <Pressable
-                    style={styles.addPhotoBtn}
-                    disabled={uploadingStage === 'after'}
-                    onPress={() => uploadProof('after')}
-                  >
-                    {uploadingStage === 'after' ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <Ionicons name="camera-outline" size={22} color={colors.primary} />
-                    )}
-                  </Pressable>
-                </View>
+            {/* After Photos */}
+            <View style={{ marginTop: spacing.md }}>
+              <View style={styles.proofHeader}>
+                <Text style={styles.proofStageTitle}>After Photos</Text>
+                <Text style={styles.proofStageCount}>{(job.proofAfterPhotos ?? []).length} uploaded</Text>
               </View>
-            )}
+              <View style={styles.photoRow}>
+                {(job.proofAfterPhotos ?? []).map((url, i) => (
+                  <Pressable
+                    key={i}
+                    onPress={() => setPreviewImage({ url, title: 'After Work Photo' })}
+                  >
+                    <Image source={{ uri: url }} style={styles.photoThumb} />
+                  </Pressable>
+                ))}
+                <Pressable
+                  style={[styles.addPhotoBtn, uploadingStage === 'after' && styles.addPhotoBtnActive]}
+                  disabled={uploadingStage === 'after'}
+                  onPress={() => setPickerModalStage('after')}
+                >
+                  {uploadingStage === 'after' ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <>
+                      <Ionicons name="camera-outline" size={22} color={colors.primary} />
+                      <Text style={styles.addPhotoText}>After</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            </View>
           </Card>
         ) : null}
 
         {job.payment ? (
           <Card style={{ marginTop: spacing.md }}>
-            <Text style={styles.sectionTitle}>Payment</Text>
+            <Text style={styles.sectionTitle}>Payment Info</Text>
             <View style={styles.itemRow}>
               <Text style={styles.metaText}>Status</Text>
               <Text style={[styles.itemQty, { color: job.payment.status === 'PAID' ? colors.success : colors.warning }]}>
@@ -337,14 +349,14 @@ export default function JobDetail() {
               Alert.alert(
                 'Complete this job?',
                 hasAfterPhoto
-                  ? 'Make sure the work is finished before marking it complete.'
-                  : "You haven't added an \"after\" photo yet — it helps protect you if the customer disputes the work later. Complete anyway?",
+                  ? 'Make sure work is completed to customer satisfaction.'
+                  : "You haven't added an \"after\" photo yet. Add an after photo to protect your payout if disputed later. Complete anyway?",
                 [
                   { text: 'Cancel', style: 'cancel' },
                   {
                     text: 'Complete',
                     onPress: () =>
-                      runAction(() => JobsAPI.complete(job.id), 'Job marked complete. Great work!'),
+                      runAction(() => JobsAPI.complete(job.id), 'Job marked complete. Great job!'),
                   },
                 ],
               );
@@ -353,6 +365,28 @@ export default function JobDetail() {
         ) : null}
       </View>
 
+      {/* Image Upload Source Selector Modal */}
+      <ImagePickerModal
+        visible={!!pickerModalStage}
+        onClose={() => setPickerModalStage(null)}
+        title={`Upload ${pickerModalStage === 'before' ? 'Before' : 'After'} Photo`}
+        subtitle={`Select camera or gallery to take ${pickerModalStage === 'before' ? 'a before' : 'an after'} work proof photo`}
+        onImagePicked={(uri) => {
+          if (pickerModalStage) {
+            handleImagePicked(uri, pickerModalStage);
+          }
+        }}
+      />
+
+      {/* Fullscreen Photo Preview Modal */}
+      <ImageViewerModal
+        visible={!!previewImage}
+        imageUrl={previewImage?.url ?? null}
+        title={previewImage?.title ?? 'Work Proof Photo'}
+        onClose={() => setPreviewImage(null)}
+      />
+
+      {/* Start Job OTP Modal with Modern UI */}
       <Modal
         visible={startModalVisible}
         transparent
@@ -362,12 +396,13 @@ export default function JobDetail() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalIconWrap}>
-              <Ionicons name="shield-checkmark-outline" size={28} color={colors.primary} />
+              <Ionicons name="key" size={28} color={colors.primary} />
             </View>
-            <Text style={styles.modalTitle}>Enter Start Code</Text>
+            <Text style={styles.modalTitle}>Customer Verification Code</Text>
             <Text style={styles.modalSubtitle}>
-              Ask the customer for the 4-digit code shown in their app to begin this job.
+              Ask the customer for the 4-digit start OTP shown on their screen to begin work.
             </Text>
+
             <TextInput
               value={startOtp}
               onChangeText={(v) => {
@@ -381,10 +416,23 @@ export default function JobDetail() {
               placeholderTextColor={colors.textMuted}
               style={[styles.modalOtpInput, startError ? styles.modalOtpInputError : null]}
             />
-            {startError ? <Text style={styles.modalErrorText}>{startError}</Text> : null}
-            <Button title="Confirm & Start" loading={acting} onPress={submitStartOtp} style={{ marginTop: spacing.lg }} />
+
+            {startError ? (
+              <View style={styles.errorBox}>
+                <Ionicons name="alert-circle-outline" size={16} color={colors.danger} />
+                <Text style={styles.modalErrorText}>{startError}</Text>
+              </View>
+            ) : null}
+
+            <Button
+              title="Verify & Start Work"
+              loading={acting}
+              onPress={submitStartOtp}
+              style={{ marginTop: spacing.lg, width: '100%' }}
+            />
+
             <Pressable
-              style={{ marginTop: spacing.md, alignItems: 'center' }}
+              style={styles.modalCancelBtn}
               onPress={() => { setStartModalVisible(false); setStartOtp(''); setStartError(''); }}
             >
               <Text style={styles.modalCancelText}>Cancel</Text>
@@ -399,26 +447,58 @@ export default function JobDetail() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   modalOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
+    flex: 1,
+    backgroundColor: colors.overlay,
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: spacing.xl,
   },
   modalCard: {
-    width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg,
-    padding: spacing.xl, alignItems: 'center',
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xxl,
+    padding: spacing.xxl,
+    alignItems: 'center',
+    ...shadow.raised,
   },
   modalIconWrap: {
-    width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primaryLight,
-    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
   },
-  modalTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.textPrimary, marginBottom: spacing.xs },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.textPrimary, marginBottom: spacing.xs, textAlign: 'center' },
   modalSubtitle: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center', marginBottom: spacing.lg, lineHeight: 20 },
   modalOtpInput: {
-    width: 160, height: 56, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted, textAlign: 'center', fontSize: fontSize.xxl,
-    fontWeight: fontWeight.extrabold, color: colors.textPrimary, letterSpacing: 8,
+    width: 180,
+    height: 60,
+    borderRadius: radius.lg,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    backgroundColor: colors.background,
+    textAlign: 'center',
+    fontSize: fontSize.xxxl,
+    fontWeight: fontWeight.extrabold,
+    color: colors.textPrimary,
+    letterSpacing: 10,
   },
   modalOtpInputError: { borderColor: colors.danger },
-  modalErrorText: { color: colors.danger, fontSize: fontSize.xs, marginTop: spacing.sm, textAlign: 'center' },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    backgroundColor: colors.dangerLight,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.md,
+  },
+  modalErrorText: { color: colors.danger, fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  modalCancelBtn: { marginTop: spacing.md, paddingVertical: spacing.xs },
   modalCancelText: { color: colors.textMuted, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg },
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
@@ -436,11 +516,26 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   overdueBannerText: { flex: 1, fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.danger },
-  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  photoThumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
+  proofHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  proofStageTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    color: colors.textPrimary,
+  },
+  proofStageCount: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+  },
+  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginTop: spacing.xs },
+  photoThumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.border },
   addPhotoBtn: {
-    width: 64,
-    height: 64,
+    width: 72,
+    height: 72,
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.primary,
@@ -448,6 +543,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.primaryLight,
+  },
+  addPhotoBtnActive: {
+    opacity: 0.6,
+  },
+  addPhotoText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.primary,
+    marginTop: 2,
   },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.textMuted, textTransform: 'uppercase', marginBottom: spacing.sm },
   itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 6 },
