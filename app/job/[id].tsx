@@ -88,25 +88,38 @@ export default function JobDetail() {
     }
   };
 
+  // FIX: the ImagePicker permission/camera calls used to sit OUTSIDE the
+  // try/catch. If launchCameraAsync threw (very common on real Android
+  // devices), the error was silently swallowed - nothing happened on
+  // screen and no error was shown. Everything is now inside one
+  // try/catch/finally so any failure surfaces an Alert + console log.
   const uploadProof = async (stage: 'before' | 'after') => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Camera permission needed', 'Allow camera access to take a work-proof photo.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
-    if (result.canceled || !result.assets?.[0]) return;
-
-    setUploadingStage(stage);
     try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Camera permission needed', 'Allow camera access to take a work-proof photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false });
+      if (result.canceled || !result.assets?.[0]) return;
+
+      setUploadingStage(stage);
+
       const asset = result.assets[0];
       const formData = new FormData();
-      formData.append('file', { uri: asset.uri, name: `${stage}-${Date.now()}.jpg`, type: 'image/jpeg' } as any);
+      formData.append('file', {
+        uri: asset.uri,
+        name: `${stage}-${Date.now()}.jpg`,
+        type: 'image/jpeg',
+      } as any);
+
       const { data } = await UploadAPI.uploadImage(formData, 'proof');
       await JobsAPI.addWorkProof(job!.id, stage, [data.data.url]);
       await load();
     } catch (e: any) {
-      Alert.alert('Upload failed', e?.response?.data?.message || 'Please try again.');
+      console.log('uploadProof error:', e);
+      Alert.alert('Upload failed', e?.response?.data?.message || e?.message || 'Please try again.');
     } finally {
       setUploadingStage(null);
     }
