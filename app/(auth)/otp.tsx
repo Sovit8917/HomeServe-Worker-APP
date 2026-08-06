@@ -9,13 +9,26 @@ import { useAuth } from '../../src/store/auth-context';
 
 export default function Otp() {
   const router = useRouter();
-  const { phone } = useLocalSearchParams<{ phone?: string }>();
+  const { phone, devOtp } = useLocalSearchParams<{ phone?: string; devOtp?: string }>();
   const { verifyOtp, sendOtp, isNewWorker } = useAuth();
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [seconds, setSeconds] = useState(30);
   const inputs = useRef<Array<TextInput | null>>([]);
+
+  // Dev/staging only: backend echoes the OTP back when OTP_BYPASS + dev
+  // mode are configured, so testers don't need to wait for a real SMS —
+  // autofill it and verify automatically instead of making them type it.
+  const autofill = (code?: string) => {
+    if (!code || code.length !== 6) return;
+    setDigits(code.split(''));
+    handleVerify(code);
+  };
+
+  useEffect(() => {
+    autofill(devOtp);
+  }, [devOtp]);
 
   useEffect(() => {
     if (seconds <= 0) return;
@@ -62,7 +75,8 @@ export default function Otp() {
     if (!phone) return;
     setSeconds(30);
     try {
-      await sendOtp(phone);
+      const code = await sendOtp(phone);
+      autofill(code);
     } catch {}
   };
 

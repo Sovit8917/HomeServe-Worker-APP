@@ -115,6 +115,7 @@ export default function JobLocationMap({
   return (
     <View style={[styles.container, { height }]}>
       <WebView
+        key={satellite ? 'satellite' : 'street'}
         source={{ html }}
         style={StyleSheet.absoluteFillObject}
         scrollEnabled={false}

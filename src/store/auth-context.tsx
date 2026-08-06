@@ -9,7 +9,7 @@ interface AuthContextValue {
   isLoading: boolean;
   isAuthenticated: boolean;
   isNewWorker: boolean;
-  sendOtp: (phone: string) => Promise<void>;
+  sendOtp: (phone: string) => Promise<string | undefined>;
   verifyOtp: (phone: string, otp: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshWorker: () => Promise<void>;
@@ -43,7 +43,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [bootstrap]);
 
   const sendOtp = async (phone: string) => {
-    await AuthAPI.sendOtp(phone);
+    const { data }: any = await AuthAPI.sendOtp(phone);
+    // Only present in non-production dev-bypass mode — lets the OTP
+    // screen autofill it so testers don't need a real SMS.
+    return data?.otp as string | undefined;
   };
 
   const verifyOtp = async (phone: string, otp: string) => {

@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Alert, Linking, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Alert, Linking, Image, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,9 @@ export default function JobDetail() {
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
   const [uploadingStage, setUploadingStage] = useState<'before' | 'after' | null>(null);
+  const [startModalVisible, setStartModalVisible] = useState(false);
+  const [startOtp, setStartOtp] = useState('');
+  const [startError, setStartError] = useState('');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -64,6 +67,25 @@ export default function JobDetail() {
 
   const callCustomer = () => {
     if (job?.user?.phone) Linking.openURL(`tel:${job.user.phone}`);
+  };
+
+  const submitStartOtp = async () => {
+    if (!job || startOtp.length !== 4) {
+      setStartError('Enter the 4-digit code');
+      return;
+    }
+    setStartError('');
+    setActing(true);
+    try {
+      await JobsAPI.start(job.id, startOtp);
+      setStartModalVisible(false);
+      setStartOtp('');
+      await load();
+    } catch (e: any) {
+      setStartError(e?.response?.data?.message || 'Incorrect code. Please try again.');
+    } finally {
+      setActing(false);
+    }
   };
 
   const uploadProof = async (stage: 'before' | 'after') => {
@@ -292,7 +314,7 @@ export default function JobDetail() {
             />
           </View>
         ) : job.status === 'ACCEPTED' ? (
-          <Button title="Start job" loading={acting} onPress={() => runAction(() => JobsAPI.start(job.id))} />
+          <Button title="Start job" loading={acting} onPress={() => { setStartOtp(''); setStartError(''); setStartModalVisible(true); }} />
         ) : job.status === 'IN_PROGRESS' ? (
           <Button
             title="Mark as completed"
@@ -317,12 +339,74 @@ export default function JobDetail() {
           />
         ) : null}
       </View>
+
+      <Modal
+        visible={startModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStartModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalIconWrap}>
+              <Ionicons name="shield-checkmark-outline" size={28} color={colors.primary} />
+            </View>
+            <Text style={styles.modalTitle}>Enter Start Code</Text>
+            <Text style={styles.modalSubtitle}>
+              Ask the customer for the 4-digit code shown in their app to begin this job.
+            </Text>
+            <TextInput
+              value={startOtp}
+              onChangeText={(v) => {
+                setStartOtp(v.replace(/[^0-9]/g, '').slice(0, 4));
+                setStartError('');
+              }}
+              keyboardType="number-pad"
+              maxLength={4}
+              autoFocus
+              placeholder="0000"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.modalOtpInput, startError ? styles.modalOtpInputError : null]}
+            />
+            {startError ? <Text style={styles.modalErrorText}>{startError}</Text> : null}
+            <Button title="Confirm & Start" loading={acting} onPress={submitStartOtp} style={{ marginTop: spacing.lg }} />
+            <Pressable
+              style={{ marginTop: spacing.md, alignItems: 'center' }}
+              onPress={() => { setStartModalVisible(false); setStartOtp(''); setStartError(''); }}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  modalCard: {
+    width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg,
+    padding: spacing.xl, alignItems: 'center',
+  },
+  modalIconWrap: {
+    width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primaryLight,
+    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md,
+  },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.textPrimary, marginBottom: spacing.xs },
+  modalSubtitle: { fontSize: fontSize.sm, color: colors.textSecondary, textAlign: 'center', marginBottom: spacing.lg, lineHeight: 20 },
+  modalOtpInput: {
+    width: 160, height: 56, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted, textAlign: 'center', fontSize: fontSize.xxl,
+    fontWeight: fontWeight.extrabold, color: colors.textPrimary, letterSpacing: 8,
+  },
+  modalOtpInputError: { borderColor: colors.danger },
+  modalErrorText: { color: colors.danger, fontSize: fontSize.xs, marginTop: spacing.sm, textAlign: 'center' },
+  modalCancelText: { color: colors.textMuted, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg },
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: colors.textPrimary },
