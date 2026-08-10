@@ -8,6 +8,7 @@ import {
   Alert,
   Linking,
   Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -77,11 +78,17 @@ export default function PermissionsModal({
   const requestAllPermissions = async () => {
     setLoading(true);
     try {
+      if (Platform.OS === 'android') {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
+      }
       const camera = await withTimeout(ImagePicker.requestCameraPermissionsAsync(), null);
       const location = await withTimeout(Location.requestForegroundPermissionsAsync(), null);
 
       let notifGranted = false;
       try {
+        if (Platform.OS === 'android' && Platform.Version >= 33) {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+        }
         const notifRes = await withTimeout(notifee.requestPermission(), null);
         if (notifRes && notifRes.authorizationStatus >= 1) {
           notifGranted = true;

@@ -8,6 +8,7 @@ import {
   Alert,
   Platform,
   Linking,
+  PermissionsAndroid,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -32,42 +33,49 @@ export default function ImagePickerModal({
   allowFrontCamera = false,
 }: ImagePickerModalProps) {
 
-  const handleCamera = async () => {
-    try {
-      const { status, canAskAgain } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        if (!canAskAgain) {
+  const handleCamera = () => {
+    onClose();
+    setTimeout(async () => {
+      try {
+        let granted = false;
+        if (Platform.OS === 'android') {
+          const androidStatus = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.CAMERA,
+          );
+          granted = androidStatus === PermissionsAndroid.RESULTS.GRANTED;
+        }
+
+        if (!granted) {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          granted = status === 'granted';
+        }
+
+        if (!granted) {
           Alert.alert(
             'Camera Access Required',
-            'Camera permission is turned off for HomeServe Pro. Enable it in Settings to take photos.',
+            'Camera permission is required to take photos for identity verification. Please enable camera access in Settings.',
             [
               { text: 'Cancel', style: 'cancel' },
               { text: 'Open Settings', onPress: () => Linking.openSettings() },
             ],
           );
-        } else {
-          Alert.alert(
-            'Camera Access Required',
-            'Please allow camera permission to take photos.',
-          );
+          return;
         }
-        return;
-      }
 
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 0.8,
-        allowsEditing: Platform.OS === 'ios',
-        cameraType: allowFrontCamera ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
-      });
+        const result = await ImagePicker.launchCameraAsync({
+          quality: 0.8,
+          allowsEditing: Platform.OS === 'ios',
+          cameraType: allowFrontCamera ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
+        });
 
-      if (!result.canceled && result.assets?.[0]?.uri) {
-        onImagePicked(result.assets[0].uri);
+        if (!result.canceled && result.assets?.[0]?.uri) {
+          onImagePicked(result.assets[0].uri);
+        }
+      } catch (e: any) {
+        console.log('Camera error:', e);
+        Alert.alert('Camera Error', e?.message || 'Failed to open camera.');
       }
-      onClose();
-    } catch (e: any) {
-      console.log('Camera error:', e);
-      Alert.alert('Camera Error', e?.message || 'Failed to open camera.');
-    }
+    }, 250);
   };
 
   return (

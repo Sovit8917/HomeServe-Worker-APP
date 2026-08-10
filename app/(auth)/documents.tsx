@@ -1,8 +1,9 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Alert, ActivityIndicator, ScrollView, Image, Platform } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Alert, ActivityIndicator, ScrollView, Image, Platform, PermissionsAndroid } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, fontSize, fontWeight, spacing, radius, shadow } from '../../src/theme';
 import Button from '../../src/components/Button';
 import { useAuth } from '../../src/store/auth-context';
@@ -45,6 +46,19 @@ export default function OnboardingDocuments() {
   const [existing, setExisting] = useState<WorkerDocument[]>(worker?.documents ?? []);
   const [uploadingType, setUploadingType] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (Platform.OS === 'android') {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
+        }
+        await ImagePicker.requestCameraPermissionsAsync();
+      } catch (e) {
+        console.log('Pre-request camera permission error:', e);
+      }
+    })();
+  }, []);
 
   const docFor = (type: string) => existing.find((d) => d.type === type);
   const allUploaded = SLOTS.every((s) => docFor(s.type));
@@ -144,7 +158,7 @@ export default function OnboardingDocuments() {
         visible={!!selectedSlot}
         onClose={() => setSelectedSlot(null)}
         title={selectedSlot ? `Upload ${selectedSlot.label}` : 'Upload Document'}
-        subtitle="Choose photo source to upload document"
+        subtitle="Camera capture required for document upload"
         allowFrontCamera={selectedSlot?.useCamera === 'front'}
         onImagePicked={handleImagePicked}
       />

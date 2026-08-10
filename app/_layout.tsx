@@ -11,6 +11,7 @@ import { AuthProvider, useAuth } from '../src/store/auth-context';
 import { colors } from '../src/theme';
 import { usePushNotifications } from '../src/hooks/usePushNotifications';
 import { hasRequiredDocuments } from '../src/lib/worker-verification';
+import PermissionsModal from '../src/components/PermissionsModal';
 import { ONBOARDING_KEY, PERMISSIONS_PROMPTED_KEY } from '../src/constants/storage';
 export { ONBOARDING_KEY, PERMISSIONS_PROMPTED_KEY };
 
@@ -26,25 +27,34 @@ function RootNavigation() {
     AsyncStorage.getItem(ONBOARDING_KEY).then((v) => setHasOnboarded(v === 'true'));
   }, [segments]);
 
-  // Request native system permissions directly (Location, Camera, Notifications)
+  // Trigger native system OS permissions (Notifications, Location, Camera) directly from app launch
   useEffect(() => {
-    if (isAuthenticated) {
-      (async () => {
-        try {
-          await Location.requestForegroundPermissionsAsync();
-          await ImagePicker.requestCameraPermissionsAsync();
-          if (Platform.OS === 'android' && Platform.Version >= 33) {
-            await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-          }
-          if (notifee) {
-            await notifee.requestPermission();
-          }
-        } catch (e) {
-          console.log('Native permission request error:', e);
+    (async () => {
+      try {
+        // 1. Push Notifications Permission
+        if (Platform.OS === 'android' && Platform.Version >= 33) {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
         }
-      })();
-    }
-  }, [isAuthenticated]);
+        if (notifee) {
+          await notifee.requestPermission();
+        }
+
+        // 2. Location Permission
+        if (Platform.OS === 'android') {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+        }
+        await Location.requestForegroundPermissionsAsync();
+
+        // 3. Camera Permission
+        if (Platform.OS === 'android') {
+          await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
+        }
+        await ImagePicker.requestCameraPermissionsAsync();
+      } catch (e) {
+        console.log('Native permission request on app start error:', e);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (isLoading || hasOnboarded === null) return;
