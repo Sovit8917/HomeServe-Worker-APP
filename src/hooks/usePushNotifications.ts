@@ -1,20 +1,9 @@
 import { useEffect, useRef } from 'react';
 import * as Device from 'expo-device';
-import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import messaging, {
-  FirebaseMessagingTypes,
-} from '@react-native-firebase/messaging';
-import notifee, {
-  AndroidImportance,
-  AndroidStyle,
-  EventType,
-} from '@notifee/react-native';
+import messaging, { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
+import notifee, { AndroidImportance, AndroidStyle, EventType } from '@notifee/react-native';
 import { WorkerAPI } from '../api/endpoints';
-
-// Push notifications (and the native RNFirebase module) aren't available
-// in Expo Go — guard every native call the same way index.ts does.
-const isExpoGo = Constants.appOwnership === 'expo';
 
 type NotificationData = { bookingId?: string; type?: string; imageUrl?: string };
 
@@ -30,8 +19,7 @@ async function ensureAndroidChannel() {
 }
 
 async function registerForPushNotificationsAsync(): Promise<string | null> {
-  if (isExpoGo || !Device.isDevice) {
-    // Skip in Expo Go, and push tokens only work on physical devices / real builds anyway.
+  if (!Device.isDevice) {
     return null;
   }
 
@@ -87,25 +75,12 @@ function routeFromData(
   }
 }
 
-/**
- * Registers this device for push notifications once the worker is
- * authenticated, syncs the token to the backend, displays rich
- * (image-capable) notifications via Notifee while the app is in the
- * foreground, and routes the worker to the right screen on tap
- * (e.g. straight to the job for a "New Job Available" push).
- *
- * Background/killed-state messages are handled in index.ts
- * (messaging().setBackgroundMessageHandler), which must live outside
- * the React tree.
- *
- * No-op inside Expo Go — push notifications require a development build.
- */
 export function usePushNotifications(isAuthenticated: boolean) {
   const router = useRouter();
   const unsubscribers = useRef<Array<() => void>>([]);
 
   useEffect(() => {
-    if (!isAuthenticated || isExpoGo) return;
+    if (!isAuthenticated) return;
 
     let cancelled = false;
 
@@ -121,7 +96,7 @@ export function usePushNotifications(isAuthenticated: boolean) {
     })();
 
     // Token can rotate (e.g. after app restore) — keep the backend in sync.
-    const unsubscribeTokenRefresh = messaging().onTokenRefresh(async (token) => {
+    const unsubscribeTokenRefresh = messaging().onTokenRefresh(async (token: string) => {
       try {
         await WorkerAPI.updateFcmToken(token);
       } catch {
@@ -131,7 +106,7 @@ export function usePushNotifications(isAuthenticated: boolean) {
 
     // Foreground: FCM never auto-displays a notification, so we build
     // the rich (image) notification ourselves via Notifee.
-    const unsubscribeOnMessage = messaging().onMessage(async (remoteMessage) => {
+    const unsubscribeOnMessage = messaging().onMessage(async (remoteMessage: FirebaseMessagingTypes.RemoteMessage) => {
       await displayRemoteMessage(remoteMessage);
     });
 
@@ -161,7 +136,7 @@ export function usePushNotifications(isAuthenticated: boolean) {
       unsubscribeOnMessage,
       unsubscribeNotifeeForeground,
     ];
-    void unsubscribeNotifeeBackground; // registered globally by Notifee, nothing to clean up
+    void unsubscribeNotifeeBackground;
 
     return () => {
       cancelled = true;

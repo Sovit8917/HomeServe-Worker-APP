@@ -101,7 +101,7 @@ export default function EditProfile() {
         visible={showPickerModal}
         onClose={() => setShowPickerModal(false)}
         title="Change Profile Photo"
-        subtitle="Take a new picture or pick from your gallery"
+        subtitle="Take a live picture with your camera"
         allowFrontCamera
         onImagePicked={handleAvatarPicked}
       />

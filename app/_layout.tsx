@@ -10,9 +10,8 @@ import { usePushNotifications } from '../src/hooks/usePushNotifications';
 import { hasRequiredDocuments } from '../src/lib/worker-verification';
 
 import PermissionsModal from '../src/components/PermissionsModal';
-
-export const ONBOARDING_KEY = 'homeserve_worker_has_onboarded';
-export const PERMISSIONS_PROMPTED_KEY = 'homeserve_worker_permissions_prompted';
+import { ONBOARDING_KEY, PERMISSIONS_PROMPTED_KEY } from '../src/constants/storage';
+export { ONBOARDING_KEY, PERMISSIONS_PROMPTED_KEY };
 
 function RootNavigation() {
   const { isAuthenticated, isLoading, worker } = useAuth();

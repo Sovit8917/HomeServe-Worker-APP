@@ -26,6 +26,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const bootstrap = useCallback(async () => {
     try {
       const token = await SecureStore.getItemAsync(TOKEN_KEY);
+      const refreshToken = await SecureStore.getItemAsync(REFRESH_KEY);
+
+      // Sessions created before refresh-token support was added never had a
+      // refresh token saved. Rather than let the access token expire later
+      // and silently fail every API call (breaking notifications, jobs,
+      // earnings, etc. all at once), detect this "legacy session" up front
+      // and force a clean re-login immediately.
+      if (token && !refreshToken) {
+        await SecureStore.deleteItemAsync(TOKEN_KEY);
+        await SecureStore.deleteItemAsync(REFRESH_KEY);
+        setIsLoading(false);
+        return;
+      }
+
       if (token) {
         const { data } = await WorkerAPI.getProfile();
         setWorker(data.data ?? (data as unknown as Worker));

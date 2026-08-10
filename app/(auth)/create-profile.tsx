@@ -257,7 +257,7 @@ export default function CreateProfile() {
         visible={showPickerModal}
         onClose={() => setShowPickerModal(false)}
         title="Add Profile Photo"
-        subtitle="Take a live photo or select one from your gallery"
+        subtitle="Take a live selfie photo with your camera"
         allowFrontCamera
         onImagePicked={handleAvatarPicked}
       />

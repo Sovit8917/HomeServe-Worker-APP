@@ -263,6 +263,16 @@ export const WalletAPI = {
       };
     }>('/wallet/worker/earnings', { params: { period } }),
   withdraw: (amount: number) => api.post('/wallet/worker/withdraw', { amount }),
+  createSettleDebtOrder: () =>
+    api.post<{
+      data: { orderId: string; amount: number; currency: string; keyId: string; owed: number };
+    }>('/wallet/worker/settle-debt/order'),
+  verifySettleDebt: (dto: {
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    razorpaySignature: string;
+    amount: number;
+  }) => api.post<{ data: { balance: number } }>('/wallet/worker/settle-debt/verify', dto),
 };
 
 // ---------- Notifications ----------

@@ -59,6 +59,11 @@ api.interceptors.response.use(
       isRefreshing = true;
       try {
         const refreshToken = await SecureStore.getItemAsync(REFRESH_KEY);
+        if (!refreshToken) {
+          // Legacy/expired session with no refresh token stored at all —
+          // don't bother round-tripping to the server, just force logout.
+          throw new Error('No refresh token available');
+        }
         // Call refresh endpoint without sending expired Bearer token in header
         const res = await axios.post(
           `${API_BASE_URL}/auth/refresh`,

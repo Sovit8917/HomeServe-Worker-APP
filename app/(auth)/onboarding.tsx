@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fontSize, fontWeight, spacing } from '../../src/theme';
 import Button from '../../src/components/Button';
-import { ONBOARDING_KEY } from '../_layout';
+import { ONBOARDING_KEY } from '../../src/constants/storage';
 
 const { width } = Dimensions.get('window');
 

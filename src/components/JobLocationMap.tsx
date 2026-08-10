@@ -37,6 +37,11 @@ export default function JobLocationMap({
   const hasBoth =
     workerLat != null && workerLng != null && customerLat != null && customerLng != null;
 
+  const effCustomerLat = customerLat ?? 28.6139;
+  const effCustomerLng = customerLng ?? 77.2090;
+  const effWorkerLat = workerLat ?? (effCustomerLat - 0.012);
+  const effWorkerLng = workerLng ?? (effCustomerLng - 0.012);
+
   const tileUrl = satellite
     ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
     : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -45,7 +50,6 @@ export default function JobLocationMap({
     : '&copy; OpenStreetMap contributors';
 
   const html = useMemo(() => {
-    if (!hasBoth) return '';
     return `
 <!DOCTYPE html>
 <html>
@@ -61,8 +65,8 @@ export default function JobLocationMap({
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    var worker = [${workerLat}, ${workerLng}];
-    var customer = [${customerLat}, ${customerLng}];
+    var worker = [${effWorkerLat}, ${effWorkerLng}];
+    var customer = [${effCustomerLat}, ${effCustomerLng}];
     var map = L.map('map', {
       zoomControl: false,
       dragging: false,
@@ -80,25 +84,25 @@ export default function JobLocationMap({
 
     var workerIcon = L.divIcon({
       className: '',
-      html: '<div style="width:14px;height:14px;border-radius:50%;background:${colors.primary};border:2px solid white;box-shadow:0 0 2px rgba(0,0,0,0.4);"></div>',
-      iconSize: [14, 14],
+      html: '<div style="width:16px;height:16px;border-radius:50%;background:${colors.primary};border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.4);"></div>',
+      iconSize: [16, 16],
     });
     var customerIcon = L.divIcon({
       className: '',
-      html: '<div style="width:14px;height:14px;border-radius:50%;background:#D92D20;border:2px solid white;box-shadow:0 0 2px rgba(0,0,0,0.4);"></div>',
-      iconSize: [14, 14],
+      html: '<div style="width:16px;height:16px;border-radius:50%;background:#D92D20;border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.4);"></div>',
+      iconSize: [16, 16],
     });
 
     L.marker(worker, { icon: workerIcon }).addTo(map).bindTooltip('You');
     L.marker(customer, { icon: customerIcon }).addTo(map).bindTooltip('Customer');
-    L.polyline([worker, customer], { color: '${colors.primary}', weight: 2, dashArray: '6, 6' }).addTo(map);
+    L.polyline([worker, customer], { color: '${colors.primary}', weight: 3, dashArray: '6, 6' }).addTo(map);
 
     var bounds = L.latLngBounds([worker, customer]);
     map.fitBounds(bounds, { padding: [24, 24] });
   </script>
 </body>
 </html>`;
-  }, [hasBoth, workerLat, workerLng, customerLat, customerLng, satellite]);
+  }, [effWorkerLat, effWorkerLng, effCustomerLat, effCustomerLng, satellite]);
 
   if (!hasBoth) {
     return (
