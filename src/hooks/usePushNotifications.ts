@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Platform, PermissionsAndroid } from 'react-native';
 import * as Device from 'expo-device';
 import { useRouter } from 'expo-router';
 import messaging, { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
@@ -23,17 +24,20 @@ async function registerForPushNotificationsAsync(): Promise<string | null> {
     return null;
   }
 
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
+    try {
+      await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+    } catch {}
+  }
+
+  try {
+    await notifee.requestPermission();
+  } catch {}
+
   const authStatus = await messaging().requestPermission();
-  const granted =
-    authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-    authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-
-  if (!granted) return null;
-
-  await notifee.requestPermission();
   await ensureAndroidChannel();
 
-  return messaging().getToken();
+  return messaging().getToken().catch(() => null);
 }
 
 /** Renders a remote FCM message as a rich Notifee notification (with image). */

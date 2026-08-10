@@ -3,7 +3,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Platform, PermissionsAndroid } from 'react-native';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import notifee from '@notifee/react-native';
@@ -29,20 +29,20 @@ function RootNavigation() {
   // Request native system permissions directly (Location, Camera, Notifications)
   useEffect(() => {
     if (isAuthenticated) {
-      AsyncStorage.getItem(PERMISSIONS_PROMPTED_KEY).then(async (v) => {
-        if (v !== 'true') {
-          await AsyncStorage.setItem(PERMISSIONS_PROMPTED_KEY, 'true');
-          try {
-            await Location.requestForegroundPermissionsAsync();
-            await ImagePicker.requestCameraPermissionsAsync();
-            if (notifee) {
-              await notifee.requestPermission();
-            }
-          } catch (e) {
-            console.log('Native permission request error:', e);
+      (async () => {
+        try {
+          await Location.requestForegroundPermissionsAsync();
+          await ImagePicker.requestCameraPermissionsAsync();
+          if (Platform.OS === 'android' && Platform.Version >= 33) {
+            await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
           }
+          if (notifee) {
+            await notifee.requestPermission();
+          }
+        } catch (e) {
+          console.log('Native permission request error:', e);
         }
-      });
+      })();
     }
   }, [isAuthenticated]);
 
