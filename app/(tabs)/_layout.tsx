@@ -1,18 +1,14 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fontSize, fontWeight } from '../../src/theme';
 
 export default function TabsLayout() {
-  // Devices differ in how much space their system navigation bar / home
-  // indicator takes up (3-button nav vs gesture nav vs OEM skins like
-  // MIUI/FuntouchOS). A fixed tab-bar height doesn't account for that, so
-  // on some devices the bar (and its labels) end up rendered underneath
-  // the system bar and effectively "hidden". Padding by the real inset
-  // fixes it on every device instead of guessing one height.
   const insets = useSafeAreaInsets();
-  const tabBarHeight = 52 + insets.bottom;
+  const bottomPadding = Platform.OS === 'ios' ? Math.max(insets.bottom, 10) : Math.max(insets.bottom, 10);
+  const tabBarHeight = Platform.OS === 'ios' ? 62 + insets.bottom : 66 + Math.max(insets.bottom, 6);
 
   return (
     <Tabs
@@ -23,10 +19,11 @@ export default function TabsLayout() {
         tabBarStyle: {
           borderTopColor: colors.border,
           height: tabBarHeight,
-          paddingBottom: Math.max(insets.bottom, 8),
-          paddingTop: 8,
+          paddingBottom: bottomPadding,
+          paddingTop: 6,
+          backgroundColor: colors.surface,
         },
-        tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+        tabBarLabelStyle: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, marginBottom: 2 },
       }}
     >
       <Tabs.Screen

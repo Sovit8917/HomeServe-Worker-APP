@@ -55,16 +55,15 @@ export default function ImagePickerModal({
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        quality: 0.7,
-        allowsEditing: true,
+        quality: 0.8,
+        allowsEditing: Platform.OS === 'ios',
         cameraType: allowFrontCamera ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
       });
-
-      onClose();
 
       if (!result.canceled && result.assets?.[0]?.uri) {
         onImagePicked(result.assets[0].uri);
       }
+      onClose();
     } catch (e: any) {
       console.log('Camera error:', e);
       Alert.alert('Camera Error', e?.message || 'Failed to open camera.');

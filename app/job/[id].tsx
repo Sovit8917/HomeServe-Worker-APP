@@ -418,7 +418,7 @@ export default function JobDetail() {
       <Modal
         visible={startModalVisible}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setStartModalVisible(false)}
         onShow={() => {
           setTimeout(() => {
@@ -427,14 +427,14 @@ export default function JobDetail() {
         }}
       >
         <Pressable
-          style={styles.modalOverlay}
+          style={styles.centerModalOverlay}
           onPress={() => {
             setStartModalVisible(false);
             setStartOtpDigits(['', '', '', '']);
             setStartError('');
           }}
         >
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          <Pressable style={styles.centerModalCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.handleBar} />
 
             <View style={styles.modalIconWrap}>

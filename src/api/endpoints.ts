@@ -150,7 +150,10 @@ export const WorkerAPI = {
   getProfile: () => api.get<{ data: Worker }>('/workers/profile'),
   updateProfile: (data: Partial<Pick<Worker, 'name' | 'email' | 'avatar' | 'bio' | 'experience' | 'serviceRadius'>>) =>
     api.put('/workers/profile', data),
-  updateFcmToken: (fcmToken: string) => api.put('/workers/fcm-token', { fcmToken }),
+  updateFcmToken: (fcmToken: string) =>
+    api.put('/workers/fcm-token', { fcmToken })
+      .catch(() => api.post('/workers/fcm-token', { fcmToken }))
+      .catch(() => api.put('/workers/profile', { fcmToken })),
   updateLocation: (latitude: number, longitude: number) =>
     api.put('/workers/location', { latitude, longitude }),
   setOnlineStatus: (isOnline: boolean) => api.put('/workers/status', { isOnline }),

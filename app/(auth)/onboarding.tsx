@@ -33,10 +33,17 @@ export default function Onboarding() {
   const router = useRouter();
   const listRef = useRef<FlatList>(null);
   const [index, setIndex] = useState(0);
+  const [finishing, setFinishing] = useState(false);
 
   const finish = async () => {
-    await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
-    router.replace('/(auth)/login');
+    if (finishing) return;
+    setFinishing(true);
+    try {
+      await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
+      router.replace('/(auth)/login');
+    } catch {
+      router.replace('/(auth)/login');
+    }
   };
 
   const next = () => {

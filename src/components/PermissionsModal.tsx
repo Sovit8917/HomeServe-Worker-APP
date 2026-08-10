@@ -12,7 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
+import notifee from '@notifee/react-native';
 import { colors, fontSize, fontWeight, radius, shadow, spacing } from '../theme';
 import Button from './Button';
 
@@ -25,6 +25,13 @@ interface PermissionState {
   camera: boolean;
   location: boolean;
   notifications: boolean;
+}
+
+function withTimeout<T>(promise: Promise<T>, fallback: T, ms = 2500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
 }
 
 export default function PermissionsModal({
@@ -40,14 +47,21 @@ export default function PermissionsModal({
 
   const checkStatus = async () => {
     try {
-      const cameraRes = await ImagePicker.getCameraPermissionsAsync();
-      const locationRes = await Location.getForegroundPermissionsAsync();
-      const notifRes = await Notifications.getPermissionsAsync();
+      const cameraRes = await withTimeout(ImagePicker.getCameraPermissionsAsync(), null);
+      const locationRes = await withTimeout(Location.getForegroundPermissionsAsync(), null);
+      let notifGranted = false;
+
+      try {
+        const notifSettings = await withTimeout(notifee.getNotificationSettings(), null);
+        if (notifSettings && notifSettings.authorizationStatus >= 1) {
+          notifGranted = true;
+        }
+      } catch {}
 
       setPermissions({
-        camera: cameraRes.granted,
-        location: locationRes.granted,
-        notifications: notifRes.granted,
+        camera: !!cameraRes?.granted,
+        location: !!locationRes?.granted,
+        notifications: notifGranted,
       });
     } catch (e) {
       console.log('Error checking permissions:', e);
@@ -63,22 +77,27 @@ export default function PermissionsModal({
   const requestAllPermissions = async () => {
     setLoading(true);
     try {
-      const camera = await ImagePicker.requestCameraPermissionsAsync();
-      const location = await Location.requestForegroundPermissionsAsync();
-      const notif = await Notifications.requestPermissionsAsync();
+      const camera = await withTimeout(ImagePicker.requestCameraPermissionsAsync(), null);
+      const location = await withTimeout(Location.requestForegroundPermissionsAsync(), null);
+
+      let notifGranted = false;
+      try {
+        const notifRes = await withTimeout(notifee.requestPermission(), null);
+        if (notifRes && notifRes.authorizationStatus >= 1) {
+          notifGranted = true;
+        }
+      } catch {}
 
       setPermissions({
-        camera: camera.granted,
-        location: location.granted,
-        notifications: notif.granted,
+        camera: !!camera?.granted,
+        location: !!location?.granted,
+        notifications: notifGranted,
       });
 
-      const anyBlocked =
-        (!camera.granted && !camera.canAskAgain) ||
-        (!location.granted && !location.canAskAgain) ||
-        (!notif.granted && !notif.canAskAgain);
+      const cameraDenied = camera ? !camera.granted && !camera.canAskAgain : false;
+      const locationDenied = location ? !location.granted && !location.canAskAgain : false;
 
-      if (anyBlocked) {
+      if (cameraDenied || locationDenied) {
         Alert.alert(
           'Permissions Required',
           'Some permissions are disabled. You can enable them in device Settings.',
@@ -88,13 +107,11 @@ export default function PermissionsModal({
           ],
         );
       }
-
-      onComplete();
     } catch (e: any) {
       console.log('Error requesting permissions:', e);
-      onComplete();
     } finally {
       setLoading(false);
+      onComplete();
     }
   };
 
