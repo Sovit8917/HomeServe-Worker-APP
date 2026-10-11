@@ -1,19 +1,6 @@
-import React from 'react';
-import {
-  Modal,
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  Alert,
-  Platform,
-  Linking,
-  PermissionsAndroid,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useEffect } from 'react';
+import { Alert, Platform, Linking, PermissionsAndroid } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { colors, fontSize, fontWeight, radius, shadow, spacing } from '../theme';
-import Button from './Button';
 
 interface ImagePickerModalProps {
   visible: boolean;
@@ -24,18 +11,30 @@ interface ImagePickerModalProps {
   allowFrontCamera?: boolean;
 }
 
+/**
+ * Camera-only capture "modal" — no gallery option, by design (live photos
+ * only, for identity/job-proof/fraud-prevention purposes).
+ *
+ * Renders no UI of its own: the camera opens immediately, every time this
+ * becomes visible, with no intermediate "Open Camera" sheet to tap through
+ * first. `title`/`subtitle` are accepted for backwards compatibility with
+ * existing call sites but are no longer shown anywhere.
+ */
 export default function ImagePickerModal({
   visible,
   onClose,
   onImagePicked,
-  title = 'Take Live Photo',
-  subtitle = 'Camera capture required for security verification',
   allowFrontCamera = false,
 }: ImagePickerModalProps) {
+  // Guards against double-firing if `visible` toggles true twice in a row
+  // before the camera activity has actually returned control to us.
+  const launchingRef = React.useRef(false);
 
-  const handleCamera = () => {
-    onClose();
-    setTimeout(async () => {
+  useEffect(() => {
+    if (!visible || launchingRef.current) return;
+    launchingRef.current = true;
+
+    (async () => {
       try {
         let granted = false;
         if (Platform.OS === 'android') {
@@ -55,8 +54,8 @@ export default function ImagePickerModal({
             'Camera Access Required',
             'Camera permission is required to take photos for identity verification. Please enable camera access in Settings.',
             [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              { text: 'Cancel', style: 'cancel', onPress: onClose },
+              { text: 'Open Settings', onPress: () => { Linking.openSettings(); onClose(); } },
             ],
           );
           return;
@@ -69,136 +68,29 @@ export default function ImagePickerModal({
         });
 
         if (!result.canceled && result.assets?.[0]?.uri) {
-          onImagePicked(result.assets[0].uri);
+          const uri = result.assets[0].uri;
+          // Close first so `visible` flips back to false — that's what
+          // resets launchingRef below, letting the next "Add photo" tap
+          // (which sets visible=true again) actually reopen the camera
+          // instead of silently no-op'ing because visible never changed.
+          onClose();
+          onImagePicked(uri);
+        } else {
+          onClose();
         }
       } catch (e: any) {
         console.log('Camera error:', e);
         Alert.alert('Camera Error', e?.message || 'Failed to open camera.');
+        onClose();
       }
-    }, 250);
-  };
+    })();
+  }, [visible]);
 
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
-          <View style={styles.handleBar} />
-          
-          <View style={styles.headerRow}>
-            <View style={styles.headerTextWrap}>
-              <Text style={styles.title}>{title}</Text>
-              <Text style={styles.subtitle}>{subtitle}</Text>
-            </View>
-            <Pressable onPress={onClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={20} color={colors.textSecondary} />
-            </Pressable>
-          </View>
+  // Reset the guard once the caller has actually closed this out, so the
+  // next "Add photo" tap reliably reopens the camera.
+  useEffect(() => {
+    if (!visible) launchingRef.current = false;
+  }, [visible]);
 
-          <View style={styles.noticeBox}>
-            <Ionicons name="shield-checkmark" size={20} color={colors.primary} />
-            <Text style={styles.noticeText}>
-              Gallery uploads are disabled to prevent fraud. Only live camera photos are accepted.
-            </Text>
-          </View>
-
-          <View style={styles.actionWrap}>
-            <Button
-              title="Open Camera"
-              icon={<Ionicons name="camera" size={20} color={colors.white} />}
-              onPress={handleCamera}
-              style={styles.cameraBtn}
-            />
-
-            <Button
-              title="Cancel"
-              variant="outline"
-              onPress={onClose}
-              style={{ marginTop: spacing.sm }}
-            />
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
+  return null;
 }
-
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.xxl,
-    borderTopRightRadius: radius.xxl,
-    paddingHorizontal: spacing.xxl,
-    paddingTop: spacing.md,
-    paddingBottom: Platform.OS === 'ios' ? spacing.xxxl + 10 : spacing.xxl,
-    ...shadow.raised,
-  },
-  handleBar: {
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.border,
-    alignSelf: 'center',
-    marginBottom: spacing.lg,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-  },
-  headerTextWrap: {
-    flex: 1,
-    paddingRight: spacing.md,
-  },
-  title: {
-    fontSize: fontSize.xl,
-    fontWeight: fontWeight.extrabold,
-    color: colors.textPrimary,
-  },
-  subtitle: {
-    fontSize: fontSize.sm,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
-  },
-  closeBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  noticeBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.primaryLight,
-    padding: spacing.md,
-    borderRadius: radius.xl,
-    marginBottom: spacing.xl,
-    gap: spacing.sm,
-  },
-  noticeText: {
-    flex: 1,
-    fontSize: fontSize.xs,
-    color: colors.primaryDark,
-    fontWeight: fontWeight.bold,
-    lineHeight: 16,
-  },
-  actionWrap: {
-    gap: spacing.xs,
-  },
-  cameraBtn: {
-    height: 52,
-    borderRadius: radius.xl,
-  },
-});

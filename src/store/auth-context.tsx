@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { AuthAPI, WorkerAPI, Worker } from '../api/endpoints';
-import { TOKEN_KEY, REFRESH_KEY, setOnUnauthorizedCallback } from '../api/client';
+import { TOKEN_KEY, REFRESH_KEY, setOnUnauthorizedCallback, setCachedToken } from '../api/client';
 import { disconnectAllSockets } from '../lib/socket';
 
 interface AuthContextValue {
@@ -34,6 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // earnings, etc. all at once), detect this "legacy session" up front
       // and force a clean re-login immediately.
       if (token && !refreshToken) {
+        setCachedToken(null);
         await SecureStore.deleteItemAsync(TOKEN_KEY);
         await SecureStore.deleteItemAsync(REFRESH_KEY);
         setIsLoading(false);
@@ -45,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setWorker(data.data ?? (data as unknown as Worker));
       }
     } catch {
+      setCachedToken(null);
       await SecureStore.deleteItemAsync(TOKEN_KEY);
       await SecureStore.deleteItemAsync(REFRESH_KEY);
     } finally {
@@ -74,6 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (accessToken) {
       await SecureStore.setItemAsync(TOKEN_KEY, accessToken);
+      setCachedToken(accessToken);
     }
     if (refreshToken) {
       await SecureStore.setItemAsync(REFRESH_KEY, refreshToken);
@@ -98,6 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
+    setCachedToken(null);
     await SecureStore.deleteItemAsync(TOKEN_KEY);
     await SecureStore.deleteItemAsync(REFRESH_KEY);
     disconnectAllSockets();

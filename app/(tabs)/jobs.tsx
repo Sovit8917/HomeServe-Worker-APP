@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, Alert, ActivityIndicator, RefreshControl, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, spacing, radius } from '../../src/theme';
 import { Card, StatusPill, statusTone, statusLabel, EmptyState } from '../../src/components/ui';
 import Button from '../../src/components/Button';
 import JobLocationMap from '../../src/components/JobLocationMap';
-import { JobsAPI, Job, JobStatus } from '../../src/api/endpoints';
-
-import messaging from '@react-native-firebase/messaging';
+import { JobsAPI, Job, JobStatus, PreBookingChatAPI, ChatAPI, checkIsCodPayment } from '../../src/api/endpoints';
+import { messaging } from '../../src/utils/safeNotifications';
+import { appCache, CACHE_KEYS, deepEqual } from '../../src/lib/cache';
+import { useRealtimeJobs } from '../../src/hooks/useRealtimeJobs';
 
 type TabKey = 'requests' | 'upcoming' | 'history';
 
@@ -20,29 +22,51 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'history', label: 'History' },
 ];
 
+function getCacheKeyForTab(tabKey: TabKey): string {
+  switch (tabKey) {
+    case 'requests':
+      return CACHE_KEYS.PENDING_REQUESTS;
+    case 'upcoming':
+      return CACHE_KEYS.UPCOMING_JOBS;
+    case 'history':
+      return CACHE_KEYS.JOB_HISTORY;
+  }
+}
+
 export default function Jobs() {
   const router = useRouter();
   const [tab, setTab] = useState<TabKey>('requests');
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [loading, setLoading] = useState(true);
+  
+  // Instant cached state
+  const [jobs, setJobs] = useState<Job[]>(() => {
+    return appCache.getMemory<Job[]>(getCacheKeyForTab('requests')) ?? [];
+  });
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actingId, setActingId] = useState<string | null>(null);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [requestsReason, setRequestsReason] = useState<string | null>(null);
+  const [requestsReason, setRequestsReason] = useState<string | null>(() => {
+    return appCache.getMemory<string>(CACHE_KEYS.PENDING_REASON);
+  });
+  const [inquiryUnread, setInquiryUnread] = useState(0);
+  const [chatUnread, setChatUnread] = useState<Record<string, number>>({});
   const tabRef = useRef(tab);
   tabRef.current = tab;
 
-  // One-off read (not a continuous watch — useLiveTracking already handles
-  // that elsewhere) just so the request-card map has a "you are here" pin.
+  // Sync tab change with local cache instantly
+  const handleTabChange = useCallback((newTab: TabKey) => {
+    setTab(newTab);
+    const cached = appCache.getMemory<Job[]>(getCacheKeyForTab(newTab));
+    if (cached) {
+      setJobs(cached);
+    }
+  }, []);
+
+  // One-off read for map pin
   useEffect(() => {
     (async () => {
       try {
         let { status } = await Location.getForegroundPermissionsAsync();
-        // Previously this only CHECKED for existing permission and gave up
-        // if not granted — for a worker who hadn't already granted location
-        // somewhere else in the app (e.g. hasn't gone online yet), the map
-        // preview showed "unavailable" forever, with no way to fix it from
-        // this screen. Now it actually asks.
         if (status !== 'granted') {
           ({ status } = await Location.requestForegroundPermissionsAsync());
         }
@@ -50,31 +74,75 @@ export default function Jobs() {
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setMyLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       } catch {
-        // Best-effort — the map component falls back to a text-only state.
+        // Best-effort
       }
     })();
   }, []);
 
   const load = useCallback(async (which: TabKey, opts?: { silent?: boolean }) => {
-    if (!opts?.silent) setLoading(true);
+    const cacheKey = getCacheKeyForTab(which);
+    const cachedData = appCache.getMemory<Job[]>(cacheKey);
+    const isSilent = opts?.silent ?? cachedData !== null;
+
+    if (!isSilent) setLoading(true);
+
     try {
+      let loadedJobs: Job[] = [];
+      let reason: string | null = null;
+
       if (which === 'requests') {
         const { data } = await JobsAPI.pendingRequests();
-        setJobs(data.data ?? []);
-        setRequestsReason(data.meta?.reason ?? null);
+        loadedJobs = data.data ?? [];
+        reason = data.meta?.reason ?? null;
+        setRequestsReason(reason);
+        appCache.set(CACHE_KEYS.PENDING_REASON, reason);
       } else if (which === 'upcoming') {
         const { data } = await JobsAPI.upcoming();
-        setJobs(data.data ?? []);
+        loadedJobs = data.data ?? [];
       } else {
         const results = await Promise.all(
           (['COMPLETED', 'CANCELLED', 'REJECTED'] as JobStatus[]).map((s) => JobsAPI.myJobs(s)),
         );
         const merged = results.flatMap((r) => r.data.data ?? []);
         merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-        setJobs(merged);
+        loadedJobs = merged;
+      }
+
+      // Update state only on tab match and real data change
+      if (tabRef.current === which) {
+        setJobs((prev) => {
+          if (!deepEqual(prev, loadedJobs)) {
+            appCache.set(cacheKey, loadedJobs);
+            return loadedJobs;
+          }
+          return prev;
+        });
+      } else {
+        appCache.set(cacheKey, loadedJobs);
+      }
+
+      // Chat unread count
+      if (which === 'upcoming' && loadedJobs.length > 0) {
+        const entries = await Promise.all(
+          loadedJobs.map(async (j) => {
+            try {
+              const { data } = await ChatAPI.getUnreadCount(j.id);
+              const count = (data as any)?.data?.count ?? 0;
+              return [j.id, count] as const;
+            } catch {
+              return [j.id, 0] as const;
+            }
+          }),
+        );
+        setChatUnread((prev) => {
+          const next = Object.fromEntries(entries);
+          return deepEqual(prev, next) ? prev : next;
+        });
+      } else if (which !== 'upcoming') {
+        setChatUnread({});
       }
     } catch {
-      setJobs([]);
+      // Non-fatal — keep cached jobs
     } finally {
       setLoading(false);
     }
@@ -82,8 +150,34 @@ export default function Jobs() {
 
   useFocusEffect(
     useCallback(() => {
-      load(tab);
+      // Hydrate cache first
+      const cacheKey = getCacheKeyForTab(tab);
+      appCache.get<Job[]>(cacheKey).then((cached) => {
+        if (cached && tabRef.current === tab) {
+          setJobs((prev) => (deepEqual(prev, cached) ? prev : cached));
+        }
+      });
+
+      load(tab, { silent: true });
+
+      PreBookingChatAPI.getThreads()
+        .then(({ data }) => {
+          const total = (data.data ?? []).reduce((sum, t) => sum + t.unreadCount, 0);
+          setInquiryUnread(total);
+        })
+        .catch(() => undefined);
     }, [tab, load]),
+  );
+
+  // Realtime Socket updates
+  useRealtimeJobs(
+    useCallback(
+      (event) => {
+        load(tabRef.current, { silent: true });
+      },
+      [load],
+    ),
+    true,
   );
 
   // A "New Job Available" push can arrive while the worker is already
@@ -91,17 +185,15 @@ export default function Jobs() {
   // which previously left the list stale until the app was reopened.
   // Refetch the "New" tab in place whenever that notification lands.
   useEffect(() => {
-    if (!messaging) return;
-    // onMessage only fires for foreground pushes, which is exactly the
-    // case this in-place refresh is for — background/killed-state pushes
-    // already refetch via useFocusEffect when the worker opens the app.
-    const unsubscribe = messaging().onMessage((remoteMessage) => {
-      const data = remoteMessage.data as { type?: string } | undefined;
-      if (data?.type === 'booking.new_request' && tabRef.current === 'requests') {
-        load('requests', { silent: true });
-      }
-    });
-    return unsubscribe;
+    if (typeof messaging !== 'undefined' && messaging) {
+      const unsubscribe = (messaging as any)().onMessage((remoteMessage: any) => {
+        const data = remoteMessage.data as { type?: string } | undefined;
+        if (data?.type === 'booking.new_request' && tabRef.current === 'requests') {
+          load('requests', { silent: true });
+        }
+      });
+      return unsubscribe;
+    }
   }, [load]);
 
   const onRefresh = useCallback(async () => {
@@ -149,11 +241,19 @@ export default function Jobs() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.heading}>Jobs</Text>
+        <Pressable onPress={() => router.push('/prebooking')} style={styles.inquiryBtn}>
+          <Ionicons name="chatbubbles-outline" size={22} color={colors.textPrimary} />
+          {inquiryUnread > 0 && (
+            <View style={styles.inquiryBadge}>
+              <Text style={styles.inquiryBadgeText}>{inquiryUnread > 9 ? '9+' : inquiryUnread}</Text>
+            </View>
+          )}
+        </Pressable>
       </View>
 
       <View style={styles.tabRow}>
         {TABS.map((t) => (
-          <Pressable key={t.key} onPress={() => setTab(t.key)} style={[styles.tabBtn, tab === t.key && styles.tabBtnActive]}>
+          <Pressable key={t.key} onPress={() => handleTabChange(t.key)} style={[styles.tabBtn, tab === t.key && styles.tabBtnActive]}>
             <Text style={[styles.tabText, tab === t.key && styles.tabTextActive]}>{t.label}</Text>
           </Pressable>
         ))}
@@ -190,64 +290,168 @@ export default function Jobs() {
               }
             />
           }
-          renderItem={({ item }) => (
-            <Card
-              style={styles.jobCard}
-              onPress={tab !== 'requests' ? () => router.push({ pathname: '/job/[id]', params: { id: item.id } }) : undefined}
-            >
-              <View style={styles.jobTop}>
-                <Text style={styles.jobService}>
-                  {item.items?.map((i) => i.service?.name).filter(Boolean).join(', ') || 'Service request'}
-                </Text>
-                <StatusPill label={statusLabel(item.status)} tone={statusTone(item.status)} />
-              </View>
-              <Text style={styles.jobMeta}>
-                {new Date(item.scheduledDate).toLocaleDateString()} · {item.scheduledTime}
-              </Text>
-              {item.address?.city ? <Text style={styles.jobMeta}>{item.address.city}</Text> : null}
-              <Text style={styles.jobAmount}>₹{(item.finalAmount ?? item.total ?? 0).toFixed(0)}</Text>
+          renderItem={({ item }) => {
+            const total = item.finalAmount ?? item.total ?? 0;
 
-              {tab !== 'requests' && item.overdueFlaggedAt ? (
-                <View style={styles.overdueBanner}>
-                  <Text style={styles.overdueBannerText}>
-                    ⚠️ Overdue — this job's scheduled time has passed
-                  </Text>
+            return (
+              <Card
+                style={styles.richJobCard}
+                onPress={() => router.push({ pathname: '/job/[id]', params: { id: item.id } })}
+              >
+                {/* Header Row: Service Name & Status */}
+                <View style={styles.jobCardHeader}>
+                  <View style={{ flex: 1, paddingRight: spacing.sm }}>
+                    <Text style={styles.richJobTitle} numberOfLines={1}>
+                      {item.items?.map((i) => i.service?.name).filter(Boolean).join(', ') || 'Service request'}
+                    </Text>
+                    {item.user?.name ? (
+                      <View style={styles.customerNameBadge}>
+                        <Ionicons name="person-circle-outline" size={14} color={colors.textSecondary} />
+                        <Text style={styles.customerNameText}>{item.user.name}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <StatusPill label={statusLabel(item.status)} tone={statusTone(item.status)} />
+                  {chatUnread[item.id] > 0 ? (
+                    <View style={styles.chatUnreadDot}>
+                      <Ionicons name="chatbubble" size={10} color={colors.white} />
+                      <Text style={styles.chatUnreadDotText}>
+                        {chatUnread[item.id] > 9 ? '9+' : chatUnread[item.id]}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
-              ) : null}
 
-              {tab === 'requests' ? (
-                <View style={{ marginTop: spacing.sm }}>
-                  <JobLocationMap
-                    workerLat={myLocation?.lat ?? null}
-                    workerLng={myLocation?.lng ?? null}
-                    customerLat={item.address?.latitude ?? null}
-                    customerLng={item.address?.longitude ?? null}
-                    distanceKm={item.distanceKm}
-                  />
-                </View>
-              ) : null}
+                {item.preferredWorkerId ? (
+                  <View style={styles.directRequestPill}>
+                    <Ionicons name="star" size={12} color={colors.primary} />
+                    <Text style={styles.directRequestPillText}>Requested you directly</Text>
+                  </View>
+                ) : null}
 
-              {tab === 'requests' ? (
-                <View style={styles.actionRow}>
-                  <Button
-                    title="Decline"
-                    variant="outline"
-                    size="sm"
-                    onPress={() => reject(item.id)}
-                    disabled={actingId === item.id}
-                    style={{ flex: 1 }}
-                  />
-                  <Button
-                    title="Accept"
-                    size="sm"
-                    onPress={() => accept(item.id)}
-                    loading={actingId === item.id}
-                    style={{ flex: 1 }}
-                  />
+                {/* Date & Time Row */}
+                <View style={styles.richMetaRow}>
+                  <View style={styles.timePill}>
+                    <Ionicons name="time-outline" size={13} color={colors.primary} />
+                    <Text style={styles.timePillText}>
+                      {new Date(item.scheduledDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {item.scheduledTime}
+                    </Text>
+                  </View>
                 </View>
-              ) : null}
-            </Card>
-          )}
+
+                {/* Location */}
+                {item.address?.fullAddress || item.address?.city ? (
+                  <View style={styles.locationRow}>
+                    <Ionicons name="location-outline" size={14} color={colors.textMuted} />
+                    <Text style={styles.locationText} numberOfLines={1}>
+                      {item.address.fullAddress || item.address.city}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* What the customer says the problem is — helps decide whether
+                    to bring extra parts/tools before accepting. */}
+                {item.issueType || item.issueDetail ? (
+                  <View style={styles.issueCard}>
+                    <View style={styles.issueHeaderRow}>
+                      <Ionicons name="construct-outline" size={13} color={colors.textSecondary} />
+                      <Text style={styles.issueLabel}>
+                        {item.issueType || 'Reported issue'}
+                      </Text>
+                    </View>
+                    {item.issueDetail ? (
+                      <Text style={styles.issueDetailText} numberOfLines={3}>
+                        {item.issueDetail}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
+
+                {/* On-site contact — the person to actually meet/call at the
+                    address, which may not be the account holder (item.user). */}
+                {item.contactName || item.contactPhone ? (
+                  <View style={styles.contactRow}>
+                    <Ionicons name="person-outline" size={13} color={colors.textSecondary} />
+                    <Text style={styles.contactText} numberOfLines={1}>
+                      On-site: {item.contactName || 'Contact'}
+                      {item.contactPhone ? ` · ${item.contactPhone}` : ''}
+                    </Text>
+                    {item.contactPhone ? (
+                      <Pressable
+                        onPress={() => Linking.openURL(`tel:${item.contactPhone}`)}
+                        style={styles.contactCallBtn}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="call" size={13} color={colors.primary} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+
+                {/* This job was auto-reassigned after a previous worker
+                    accepted and never showed — the customer may already be
+                    frustrated, and this worker should know before heading out. */}
+                {item.reassignCount ? (
+                  <View style={styles.reassignBanner}>
+                    <Ionicons name="alert-circle-outline" size={13} color="#92400E" />
+                    <Text style={styles.reassignBannerText}>
+                      Reassigned after previous worker didn't show ({item.reassignCount}x)
+                    </Text>
+                  </View>
+                ) : null}
+
+                {tab !== 'requests' && item.overdueFlaggedAt ? (
+                  <View style={styles.overdueBanner}>
+                    <Ionicons name="alert-circle" size={14} color={colors.danger} />
+                    <Text style={styles.overdueBannerText}>Overdue job</Text>
+                  </View>
+                ) : null}
+
+                {tab === 'requests' ? (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <JobLocationMap
+                      workerLat={myLocation?.lat ?? null}
+                      workerLng={myLocation?.lng ?? null}
+                      customerLat={item.address?.latitude ?? null}
+                      customerLng={item.address?.longitude ?? null}
+                      distanceKm={item.distanceKm}
+                    />
+                  </View>
+                ) : null}
+
+                {/* Footer Payout & Action */}
+                <View style={styles.cardFooterRow}>
+                  <View>
+                    <Text style={styles.payoutLabel}>Total Payout</Text>
+                    <Text style={styles.payoutValue}>₹{total.toFixed(0)}</Text>
+                  </View>
+
+                  {tab === 'requests' ? (
+                    <View style={styles.requestActionBtns}>
+                      <Button
+                        title="Decline"
+                        variant="outline"
+                        size="sm"
+                        onPress={() => reject(item.id)}
+                        disabled={actingId === item.id}
+                      />
+                      <Button
+                        title="Accept"
+                        size="sm"
+                        onPress={() => accept(item.id)}
+                        loading={actingId === item.id}
+                      />
+                    </View>
+                  ) : (
+                    <View style={styles.detailsBtnLink}>
+                      <Text style={styles.detailsBtnText}>Details</Text>
+                      <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+                    </View>
+                  )}
+                </View>
+              </Card>
+            );
+          }}
         />
       )}
     </SafeAreaView>
@@ -256,30 +460,269 @@ export default function Jobs() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  header: { paddingHorizontal: spacing.xxl, paddingTop: spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xxl, paddingTop: spacing.md },
   heading: { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, color: colors.textPrimary },
+  inquiryBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
+  inquiryBadge: { position: 'absolute', top: -2, right: -2, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+  inquiryBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.white },
+  chatUnreadDot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    marginLeft: spacing.xs,
+  },
+  chatUnreadDotText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.white },
   tabRow: { flexDirection: 'row', paddingHorizontal: spacing.xxl, marginTop: spacing.lg, gap: spacing.sm },
   tabBtn: { flex: 1, paddingVertical: spacing.sm, borderRadius: radius.pill, alignItems: 'center', backgroundColor: colors.surfaceMuted },
   tabBtnActive: { backgroundColor: colors.primary },
   tabText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.textSecondary },
   tabTextActive: { color: colors.white },
-  list: { padding: spacing.xxl, gap: spacing.md, flexGrow: 1 },
-  jobCard: { gap: 4 },
-  jobTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  jobService: { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: colors.textPrimary, flex: 1, marginRight: spacing.sm },
-  jobMeta: { fontSize: fontSize.xs, color: colors.textMuted },
-  jobAmount: { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: colors.primary, marginTop: 4 },
-  overdueBanner: {
-    backgroundColor: colors.dangerLight ?? '#FDECEC',
+  list: { padding: spacing.lg, gap: spacing.md, flexGrow: 1 },
+  richJobCard: {
+    padding: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: colors.surface,
+    gap: spacing.xs + 2,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  jobCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  richJobTitle: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.extrabold,
+    color: colors.textPrimary,
+  },
+  customerNameBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  customerNameText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.textSecondary,
+  },
+  richMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  timePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  timePillText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.primaryDark,
+  },
+  codPill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  codPillText: {
+    fontSize: 11,
+    fontWeight: fontWeight.extrabold,
+    color: '#B45309',
+  },
+  paidPill: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  paidPillText: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    color: '#065F46',
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  locationText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    flex: 1,
+  },
+  richAddressCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.xs,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+  },
+  richAddressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  richAddressText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.medium,
+    color: colors.textPrimary,
+    flex: 1,
+    lineHeight: 18,
+  },
+  richLandmarkPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+  },
+  richLandmarkText: {
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+    color: '#92400E',
+  },
+  cardFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.xs,
+    paddingTop: spacing.xs + 2,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderLight,
+  },
+  payoutLabel: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontWeight: fontWeight.medium,
+  },
+  payoutValue: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.extrabold,
+    color: colors.primary,
+  },
+  requestActionBtns: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  detailsBtnLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+  },
+  detailsBtnText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.primary,
+  },
+  directRequestPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.pill,
+    paddingVertical: 2,
+    paddingHorizontal: spacing.sm,
+  },
+  directRequestPillText: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    color: colors.primaryDark,
+  },
+  issueCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    marginTop: spacing.xs,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+    gap: 2,
+  },
+  issueHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  issueLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.textSecondary,
+  },
+  issueDetailText: {
+    fontSize: fontSize.xs,
+    color: colors.textPrimary,
+    lineHeight: 17,
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  contactText: {
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    flex: 1,
+  },
+  contactCallBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reassignBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF3C7',
     borderRadius: radius.sm,
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
-    marginTop: spacing.xs,
+    marginTop: 2,
+  },
+  reassignBannerText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: '#92400E',
+    flex: 1,
+  },
+  overdueBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEE2E2',
+    borderRadius: radius.sm,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
   },
   overdueBannerText: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.bold,
-    color: colors.danger ?? '#D92D20',
+    color: colors.danger,
   },
-  actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
 });

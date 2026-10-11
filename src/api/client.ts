@@ -5,9 +5,24 @@ import * as SecureStore from 'expo-secure-store';
 // (EXPO_PUBLIC_API_BASE_URL) — see .env.example. Falls back to the deployed
 // URL only if the env var is missing.
 export const LOCAL_HOST =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://nextjs-backend-with-fix.onrender.com';
+  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://homeserve-api.duckdns.org';
 
 export const API_BASE_URL = `${LOCAL_HOST}/api/v1`;
+
+// If EXPO_PUBLIC_API_BASE_URL isn't set (no .env, or the key is missing),
+// the app silently falls back to the deployed URL above — which is fine in
+// production builds, but during local development this used to cause
+// confusing bugs where a dev's changes never seemed to reach "their"
+// backend because the app was actually talking to the deployed one the
+// whole time. Surface that loudly instead of staying silent about it.
+if (__DEV__ && !process.env.EXPO_PUBLIC_API_BASE_URL) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[HomeServe] EXPO_PUBLIC_API_BASE_URL is not set — falling back to ' +
+      `${LOCAL_HOST}. Copy .env.example to .env and set it to your local ` +
+      'backend URL if that is not what you intended.',
+  );
+}
 
 export const TOKEN_KEY = 'homeserve_worker_access_token';
 export const REFRESH_KEY = 'homeserve_worker_refresh_token';
@@ -24,8 +39,24 @@ export function setOnUnauthorizedCallback(cb: () => void) {
   onUnauthorizedCallback = cb;
 }
 
+// In-memory mirror of the access token — avoids a SecureStore/Keychain
+// round trip on every single API call (it only actually changes on
+// login/refresh/logout). See customer app's client.ts for the same fix.
+let cachedToken: string | null | undefined; // undefined = not loaded yet
+
+export function setCachedToken(token: string | null) {
+  cachedToken = token;
+}
+
+async function getToken(): Promise<string | null> {
+  if (cachedToken === undefined) {
+    cachedToken = await SecureStore.getItemAsync(TOKEN_KEY);
+  }
+  return cachedToken;
+}
+
 api.interceptors.request.use(async (config) => {
-  const token = await SecureStore.getItemAsync(TOKEN_KEY);
+  const token = await getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -76,6 +107,7 @@ api.interceptors.response.use(
 
         if (!newToken) throw new Error('No token in refresh response');
         await SecureStore.setItemAsync(TOKEN_KEY, newToken);
+        setCachedToken(newToken);
         if (newRefreshToken) {
           await SecureStore.setItemAsync(REFRESH_KEY, newRefreshToken);
         }
@@ -87,6 +119,7 @@ api.interceptors.response.use(
       } catch (err) {
         queue.forEach((cb) => cb(null));
         queue = [];
+        setCachedToken(null);
         await SecureStore.deleteItemAsync(TOKEN_KEY);
         await SecureStore.deleteItemAsync(REFRESH_KEY);
         if (onUnauthorizedCallback) {

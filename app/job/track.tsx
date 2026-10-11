@@ -19,7 +19,7 @@ import { colors, fontSize, fontWeight, spacing, radius, shadow } from '../../src
 import { Card, IconBadge } from '../../src/components/ui';
 import Button from '../../src/components/Button';
 import JobLocationMap from '../../src/components/JobLocationMap';
-import { JobsAPI, Job } from '../../src/api/endpoints';
+import { JobsAPI, Job, TrackingAPI, EtaResult } from '../../src/api/endpoints';
 
 function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371;
@@ -44,12 +44,44 @@ export default function TrackJob() {
   const [workerLocation, setWorkerLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [distance, setDistance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [eta, setEta] = useState<EtaResult | null>(null);
+  const [etaLoading, setEtaLoading] = useState(true);
 
   useEffect(() => {
     if (!id) return;
     JobsAPI.getById(id)
       .then(({ data }) => setJob(data.data))
       .finally(() => setLoading(false));
+  }, [id]);
+
+  // Server-computed ETA — same haversine-based estimate the customer app
+  // sees, so both sides agree on one number instead of the worker app
+  // showing its own on-device guess. Polled every 30s (worker location
+  // itself only updates every ~15m/6s via the watcher elsewhere, so
+  // anything faster would just be re-fetching the same number).
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const fetchEta = async () => {
+      try {
+        const { data } = await TrackingAPI.getEta(id);
+        if (!cancelled) setEta(data.data);
+      } catch {
+        if (!cancelled) setEta(null);
+      } finally {
+        if (!cancelled) setEtaLoading(false);
+      }
+    };
+
+    fetchEta();
+    interval = setInterval(fetchEta, 30000);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
   }, [id]);
 
   useEffect(() => {
@@ -78,8 +110,18 @@ export default function TrackJob() {
   }, [job?.address?.latitude, job?.address?.longitude]);
 
   const openNavigationApp = async (type: 'google' | 'apple' | 'geo') => {
-    const latitude = job?.address?.latitude || 28.6139;
-    const longitude = job?.address?.longitude || 77.2090;
+    const latitude = job?.address?.latitude;
+    const longitude = job?.address?.longitude;
+    if (latitude == null || longitude == null) {
+      // No hardcoded city fallback here — silently navigating to a
+      // Delhi coordinate for a job that isn't actually in Delhi is worse
+      // than telling the worker we don't have an address to navigate to.
+      Alert.alert(
+        'No address on file',
+        'This job has no location set, so navigation can\u2019t be started. Please contact the customer or support.',
+      );
+      return;
+    }
     let url = '';
 
     if (type === 'google') {
@@ -112,6 +154,17 @@ export default function TrackJob() {
   }
 
   const driveTime = distance !== null ? estimateDriveTime(distance) : null;
+  // Server ETA wins when the backend has enough to compute one (an actual
+  // reported location + address coordinates); otherwise fall back to the
+  // on-device straight-line guess from the live location watcher so the
+  // screen never just shows nothing while the server catches up. The
+  // fallback is clearly flagged as "Estimated" (see isEtaEstimated below)
+  // so it's never mistaken for the server-confirmed figure the customer
+  // app is also showing.
+  const serverEtaMinutes = eta?.available ? eta.etaMinutes : null;
+  const isEtaEstimated = serverEtaMinutes == null && driveTime != null;
+  const displayEtaLabel = serverEtaMinutes != null ? `${serverEtaMinutes} mins` : driveTime ?? '—';
+  const displayDistanceKm = eta?.available && eta.distanceKm != null ? eta.distanceKm : distance;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -143,16 +196,40 @@ export default function TrackJob() {
             <Ionicons name="navigate-circle" size={24} color={colors.primary} />
             <Text style={styles.metricLabel}>Distance</Text>
             <Text style={styles.metricValue}>
-              {distance !== null ? `${distance.toFixed(1)} km` : '0.0 km'}
+              {displayDistanceKm !== null ? `${displayDistanceKm.toFixed(1)} km` : '0.0 km'}
             </Text>
           </Card>
 
           <Card style={styles.metricCard}>
             <Ionicons name="time" size={24} color={colors.info} />
-            <Text style={styles.metricLabel}>Est. Travel Time</Text>
-            <Text style={styles.metricValue}>{driveTime ?? '1-2 mins'}</Text>
+            <View style={styles.etaLabelRow}>
+              <Text style={styles.metricLabel}>Est. Travel Time</Text>
+              {eta?.available ? (
+                <View style={styles.liveDot} />
+              ) : null}
+            </View>
+            {etaLoading ? (
+              <ActivityIndicator size="small" color={colors.info} style={{ marginTop: 4 }} />
+            ) : (
+              <>
+                <Text style={styles.metricValue}>{displayEtaLabel}</Text>
+                {isEtaEstimated ? <Text style={styles.etaEstimatedTag}>Estimated</Text> : null}
+              </>
+            )}
           </Card>
         </View>
+
+        {!etaLoading && !eta?.available ? (
+          <View style={styles.etaNoticeBox}>
+            <Ionicons name="information-circle-outline" size={15} color={colors.textMuted} />
+            <Text style={styles.etaNoticeText}>
+              {eta?.reason ??
+                (isEtaEstimated
+                  ? 'Showing a rough on-device estimate — the live server ETA will appear shortly.'
+                  : 'ETA will appear once your location is being shared with this job.')}
+            </Text>
+          </View>
+        ) : null}
 
         {/* Customer & Address Details Card */}
         <Card style={styles.detailsCard}>
@@ -270,6 +347,40 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.extrabold,
     color: colors.textPrimary,
     marginTop: 2,
+  },
+  etaLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: spacing.xs,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.success,
+  },
+  etaEstimatedTag: {
+    fontSize: 10,
+    fontWeight: fontWeight.semibold,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  etaNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  etaNoticeText: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    color: colors.textMuted,
+    lineHeight: 16,
   },
   detailsCard: {
     marginTop: spacing.md,

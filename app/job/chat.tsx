@@ -28,8 +28,12 @@ export default function JobChat() {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [customerTyping, setCustomerTyping] = useState(false);
   const listRef = useRef<FlatList>(null);
   const socketRef = useRef<Socket | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingRef = useRef(false);
 
   useEffect(() => {
     if (!id) return;
@@ -39,8 +43,12 @@ export default function JobChat() {
       try {
         const [jobRes, msgRes] = await Promise.all([JobsAPI.getById(id), ChatAPI.getMessages(id, 1, 100)]);
         if (!mounted) return;
+        const rawMsgs = msgRes.data.data ?? [];
+        const sorted = rawMsgs
+          .slice()
+          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
         setJob(jobRes.data.data);
-        setMessages((msgRes.data.data ?? []).slice().reverse());
+        setMessages(sorted);
       } catch {
         // Non-fatal — chat just starts empty.
       } finally {
@@ -50,17 +58,94 @@ export default function JobChat() {
 
     (async () => {
       const socket = await getSocket('chat');
+      if (!mounted) return;
       socketRef.current = socket;
-      socket.emit('join-booking', { bookingId: id });
-      socket.on('new-message', (msg: ChatMessage) => {
+
+      // socket.io's `reconnection: true` (see src/lib/socket.ts) restores
+      // the transport automatically, but room membership is server-side
+      // session state tied to that specific connection — a reconnect (any
+      // network blip, or the app coming back from the background) drops
+      // us from `booking:{id}` without dropping the socket itself. Without
+      // re-emitting join-booking here, we'd keep looking "connected" while
+      // silently missing every new-message broadcast until this screen is
+      // torn down and remounted.
+      const onConnect = () => {
+        setConnected(true);
+        socket.emit('join-booking', { bookingId: id });
+        // Clear the unread badge (jobs list, tab bar) for this booking's
+        // chat now that the worker is actually looking at it. There's no
+        // REST endpoint for this — booking-chat read receipts are only
+        // ever flipped via this socket event — so without it the unread
+        // count returned by GET /chat/:bookingId/unread would never
+        // reset, even after the worker has read every message.
+        socket.emit('mark-read', { bookingId: id });
+      };
+      const onDisconnect = () => setConnected(false);
+      const onNewMessage = (msg: ChatMessage & { tempId?: string }) => {
         if (msg.bookingId !== id) return;
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-      });
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          // Match on the server-echoed tempId first (exact — this is our
+          // own optimistic send being confirmed); fall back to a text
+          // match only for messages that never went through a temp bubble.
+          const tempIdx = msg.tempId
+            ? prev.findIndex((m) => m.id === msg.tempId)
+            : prev.findIndex((m) => m.id.startsWith('temp-') && m.message === msg.message);
+          if (tempIdx !== -1) {
+            const copy = [...prev];
+            copy[tempIdx] = msg;
+            return copy;
+          }
+          return [...prev, msg];
+        });
+        // A new message can arrive from the customer while this screen is
+        // already open and focused — mark it read immediately rather than
+        // waiting for the next visit, so the badge doesn't falsely persist.
+        socket.emit('mark-read', { bookingId: id });
+        setCustomerTyping(false);
+      };
+
+      const onMessagesRead = (payload: { bookingId: string; readBy: string }) => {
+        if (payload.bookingId !== id) return;
+        // The customer just opened/read the thread — flip every message
+        // WE sent to isRead so the checkmark turns blue live, the same
+        // way the customer app already does for the worker's reads.
+        setMessages((prev) =>
+          prev.map((m) => (m.senderId === worker?.id ? { ...m, isRead: true } : m)),
+        );
+      };
+
+      const onCustomerTyping = (payload: { bookingId: string; userId: string }) => {
+        if (payload.bookingId !== id) return;
+        if (payload.userId === worker?.id) return;
+        setCustomerTyping(true);
+      };
+
+      const onCustomerStopTyping = (payload: { bookingId: string }) => {
+        if (payload.bookingId !== id) return;
+        setCustomerTyping(false);
+      };
+
+      socket.on('connect', onConnect);
+      socket.on('disconnect', onDisconnect);
+      socket.on('new-message', onNewMessage);
+      socket.on('messages-read', onMessagesRead);
+      socket.on('user-typing', onCustomerTyping);
+      socket.on('user-stop-typing', onCustomerStopTyping);
+      if (socket.connected) onConnect();
+
+      return () => {
+        socket.off('connect', onConnect);
+        socket.off('disconnect', onDisconnect);
+        socket.off('new-message', onNewMessage);
+        socket.off('messages-read', onMessagesRead);
+        socket.off('user-typing', onCustomerTyping);
+        socket.off('user-stop-typing', onCustomerStopTyping);
+      };
     })();
 
     return () => {
       mounted = false;
-      socketRef.current?.off('new-message');
     };
   }, [id]);
 
@@ -70,21 +155,88 @@ export default function JobChat() {
     }, []),
   );
 
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    };
+  }, []);
+
+  const stopTyping = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    if (isTypingRef.current && socketRef.current?.connected && id) {
+      socketRef.current.emit('stop-typing', { bookingId: id });
+    }
+    isTypingRef.current = false;
+  }, [id]);
+
+  const handleTextChange = useCallback(
+    (value: string) => {
+      setText(value);
+      if (!id || !socketRef.current?.connected) return;
+      if (!isTypingRef.current) {
+        isTypingRef.current = true;
+        socketRef.current.emit('typing', { bookingId: id });
+      }
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(stopTyping, 2500);
+    },
+    [id, stopTyping],
+  );
+
   const send = async () => {
     const body = text.trim();
     if (!body || !id) return;
+
+    stopTyping();
+
+    const tempId = `temp-${Date.now()}`;
+    const tempMsg: ChatMessage = {
+      id: tempId,
+      bookingId: id,
+      senderId: worker?.id || '',
+      senderType: 'WORKER',
+      message: body,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
+
     setText('');
     setSending(true);
+    setMessages((prev) => [...prev, tempMsg]);
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+
+    // Prefer the live socket path (server echoes `tempId` back on the
+    // broadcast — see onNewMessage — so this exact bubble gets swapped in
+    // place instead of waiting on a REST round trip). Falls back to REST
+    // only when there's no live connection, same pattern as the customer
+    // app's chat screen.
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('send-message', { bookingId: id, message: body, tempId });
+      setSending(false);
+      return;
+    }
+
     try {
-      // The backend broadcasts this over the 'new-message' socket event to
-      // everyone in the booking room (including us, since we joined above),
-      // so we don't need to append it locally — the listener above will.
-      await ChatAPI.sendMessage(id, body);
-      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+      const res = await ChatAPI.sendMessage(id, body);
+      const serverMsg = res.data?.data;
+      if (serverMsg) {
+        setMessages((prev) => {
+          const hasReal = prev.some((m) => m.id === serverMsg.id);
+          if (hasReal) {
+            return prev.filter((m) => m.id !== tempId);
+          }
+          return prev.map((m) => (m.id === tempId ? serverMsg : m));
+        });
+      }
     } catch {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setText(body);
     } finally {
       setSending(false);
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
     }
   };
 
@@ -116,15 +268,35 @@ export default function JobChat() {
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             renderItem={({ item }) => {
               const isMe = item.senderType === 'WORKER' || item.senderId === worker?.id;
+              const formattedTime = item.createdAt
+                ? new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : '';
               return (
                 <View style={[styles.bubbleRow, isMe && styles.bubbleRowMe]}>
                   <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
                     <Text style={[styles.bubbleText, isMe && styles.bubbleTextMe]}>{item.message}</Text>
+                    <View style={styles.bubbleMeta}>
+                      <Text style={[styles.bubbleTime, isMe && styles.bubbleTimeMe]}>{formattedTime}</Text>
+                      {isMe && (
+                        <Ionicons
+                          name={item.isRead ? 'checkmark-done' : 'checkmark'}
+                          size={14}
+                          color={item.isRead ? '#90CAF9' : 'rgba(255,255,255,0.75)'}
+                          style={{ marginLeft: 3 }}
+                        />
+                      )}
+                    </View>
                   </View>
                 </View>
               );
             }}
           />
+
+          {customerTyping && (
+            <View style={styles.typingRow}>
+              <Text style={styles.typingText}>{job?.user?.name ?? 'Customer'} is typing…</Text>
+            </View>
+          )}
 
           <View style={styles.inputRow}>
             <TextInput
@@ -132,7 +304,8 @@ export default function JobChat() {
               placeholder="Type a message..."
               placeholderTextColor={colors.textMuted}
               value={text}
-              onChangeText={setText}
+              onChangeText={handleTextChange}
+              onBlur={stopTyping}
               multiline
             />
             <Pressable onPress={send} disabled={!text.trim() || sending} style={[styles.sendBtn, (!text.trim() || sending) && { opacity: 0.5 }]}>
@@ -151,7 +324,7 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
   headerName: { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: colors.textPrimary },
   headerSub: { fontSize: fontSize.xs, color: colors.textMuted },
-  list: { padding: spacing.lg, gap: spacing.sm },
+  list: { padding: spacing.lg, gap: spacing.sm, flexGrow: 1 },
   bubbleRow: { flexDirection: 'row' },
   bubbleRowMe: { justifyContent: 'flex-end' },
   bubble: { maxWidth: '78%', borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
@@ -159,7 +332,12 @@ const styles = StyleSheet.create({
   bubbleMe: { backgroundColor: colors.primary, borderBottomRightRadius: 4 },
   bubbleText: { fontSize: fontSize.md, color: colors.textPrimary },
   bubbleTextMe: { color: colors.white },
+  bubbleMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 4 },
+  bubbleTime: { fontSize: 10, color: colors.textMuted },
+  bubbleTimeMe: { color: 'rgba(255,255,255,0.75)' },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.borderLight, backgroundColor: colors.surface },
+  typingRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xs },
+  typingText: { fontSize: fontSize.xs, color: colors.textMuted, fontStyle: 'italic' },
   input: { flex: 1, maxHeight: 100, backgroundColor: colors.surfaceMuted, borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: fontSize.md, color: colors.textPrimary },
   sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
 });
